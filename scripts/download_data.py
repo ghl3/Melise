@@ -22,6 +22,10 @@ Available datasets:
     david-copperfield  Dickens, David Copperfield                    ~1.9 MB
     voyage-beagle      Darwin, Voyage of the Beagle                  ~1.0 MB
     meditations        Marcus Aurelius (Long tr.), Meditations       ~300 KB
+    relativity         Einstein, Relativity (Special + General)      ~205 KB
+    treatise-light     Huygens, Treatise on Light                    ~207 KB
+    discourse-method   Descartes, Discourse on the Method            ~147 KB
+    descent-of-man     Darwin, The Descent of Man                    ~1.9 MB
 
 Examples:
     .venv/bin/python scripts/download_data.py
@@ -149,6 +153,26 @@ DATASETS: dict[str, tuple[str, str, str]] = {
     "meditations": (
         "https://www.gutenberg.org/files/2680/2680-0.txt",
         "meditations.txt",
+        "gutenberg",
+    ),
+    "relativity": (
+        "https://www.gutenberg.org/files/30155/30155-0.txt",
+        "relativity.txt",
+        "gutenberg",
+    ),
+    "treatise-light": (
+        "https://www.gutenberg.org/files/14725/14725-0.txt",
+        "treatise_on_light.txt",
+        "gutenberg",
+    ),
+    "discourse-method": (
+        "https://www.gutenberg.org/files/59/59-0.txt",
+        "discourse_on_method.txt",
+        "gutenberg",
+    ),
+    "descent-of-man": (
+        "https://www.gutenberg.org/files/2300/2300-0.txt",
+        "descent_of_man.txt",
         "gutenberg",
     ),
 }
