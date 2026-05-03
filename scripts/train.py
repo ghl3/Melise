@@ -19,7 +19,7 @@ Each run writes to its own subdirectory under checkpoints/ containing:
 
     step_NNNN.pt    rolling checkpoints (oldest pruned to --keep-last)
     latest.pt       symlink to most recent
-    best.pt         symlink to lowest-val-loss checkpoint (protected from pruning)
+    best.pt         full checkpoint, replaced whenever val_loss hits a new low
     interrupted.pt  saved on Ctrl-C if training is interrupted
     run.json        manifest: args, config, datasets, start time
     metrics.jsonl   append-only event log (steps / evals / saves / samples)
@@ -67,9 +67,15 @@ _NOUNS = [
 
 
 def generate_run_name() -> str:
-    """Return e.g. 'calm-river-20260503-141522'."""
-    adj = random.choice(_ADJECTIVES)
-    noun = random.choice(_NOUNS)
+    """Return e.g. 'calm-river-20260503-141522'.
+
+    Uses a separate time-seeded RNG so the chosen name is independent of
+    --seed (otherwise two default-seed runs started in the same second
+    would collide).
+    """
+    rng = random.Random()  # seeded from os.urandom
+    adj = rng.choice(_ADJECTIVES)
+    noun = rng.choice(_NOUNS)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"{adj}-{noun}-{ts}"
 
@@ -221,28 +227,32 @@ def parse_weights(weights_str, byte_counts):
 def eval_loss(model, val_datasets, weights, batch_size, seq_len, n_batches):
     was_training = model.training
     model.eval()
-    total = 0.0
-    for _ in range(n_batches):
-        inputs, targets = get_batch(val_datasets, weights, batch_size, seq_len)
-        logits = model(inputs)
-        loss = F.cross_entropy(logits.view(-1, model.cfg.vocab_size), targets.view(-1))
-        total += loss.item()
-    if was_training:
-        model.train()
-    return total / n_batches
+    try:
+        total = 0.0
+        for _ in range(n_batches):
+            inputs, targets = get_batch(val_datasets, weights, batch_size, seq_len)
+            logits = model(inputs)
+            loss = F.cross_entropy(logits.view(-1, model.cfg.vocab_size), targets.view(-1))
+            total += loss.item()
+        return total / n_batches
+    finally:
+        if was_training:
+            model.train()
 
 
 @torch.no_grad()
 def sample_text(model, device, prompt, n_tokens):
     was_training = model.training
     model.eval()
-    ids = torch.tensor([list(prompt)], device=device, dtype=torch.long)
-    out_ids = generate(model, ids, max_new_tokens=n_tokens)
-    out_bytes = bytes(b if 0 <= b < 256 else 0x3f for b in out_ids)
-    full = prompt + out_bytes
-    if was_training:
-        model.train()
-    return full.decode("utf-8", errors="replace")
+    try:
+        ids = torch.tensor([list(prompt)], device=device, dtype=torch.long)
+        out_ids = generate(model, ids, max_new_tokens=n_tokens)
+        out_bytes = bytes(b if 0 <= b < 256 else 0x3f for b in out_ids)
+        full = prompt + out_bytes
+        return full.decode("utf-8", errors="replace")
+    finally:
+        if was_training:
+            model.train()
 
 
 # ---------- Checkpointing ----------
@@ -271,9 +281,11 @@ def update_symlink(out_dir, name, target):
     link.symlink_to(target.name)
 
 
-def prune_old_checkpoints(out_dir, keep_last, protected: set[str]):
-    """Delete all but the most recent `keep_last` step_*.pt files. Never
-    deletes anything in `protected` (filenames). Returns deleted paths.
+def prune_old_checkpoints(out_dir, keep_last):
+    """Delete all but the most recent `keep_last` step_*.pt files.
+
+    `best.pt` is now a regular file (not a symlink to a step_*.pt), so
+    pruning step files doesn't risk deleting it.
     """
     if keep_last <= 0:
         return []
@@ -283,10 +295,35 @@ def prune_old_checkpoints(out_dir, keep_last, protected: set[str]):
     )
     if len(ckpts) <= keep_last:
         return []
-    to_delete = [p for p in ckpts[:-keep_last] if p.name not in protected]
+    to_delete = ckpts[:-keep_last]
     for p in to_delete:
         p.unlink()
     return to_delete
+
+
+def recover_best_from_metrics(metrics_path):
+    """Scan an existing metrics.jsonl for the best val seen so far.
+
+    Returns (best_val, best_step) or (inf, None) if no eval events found.
+    Used on resume to continue tracking best from where the previous run
+    left off, instead of resetting to inf.
+    """
+    best_val = float("inf")
+    best_step = None
+    if not metrics_path.exists():
+        return best_val, best_step
+    with open(metrics_path) as f:
+        for line in f:
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("event") == "eval":
+                v = ev.get("val_loss")
+                if v is not None and v < best_val:
+                    best_val = v
+                    best_step = ev.get("step")
+    return best_val, best_step
 
 
 # ---------- Metrics + run manifest ----------
@@ -326,19 +363,19 @@ def emit(metrics_f, **fields):
 def main() -> None:
     args = parse_args()
     torch.manual_seed(args.seed)
-    random.seed(args.seed)
     device = torch.device(args.device)
 
     out_dir = resolve_run_dir(args)
     out_dir.mkdir(parents=True, exist_ok=True)
     args.out = out_dir
 
-    # Mirror stdout to a per-run train.log.
+    # Mirror stdout to a per-run train.log. Closed in the finally block.
     log_file = open(out_dir / "train.log", "a", buffering=1)
     sys.stdout = Tee(sys.__stdout__, log_file)
     sys.stderr = Tee(sys.__stderr__, log_file)
 
-    metrics_f = open_metrics_log(out_dir / "metrics.jsonl")
+    metrics_path = out_dir / "metrics.jsonl"
+    metrics_f = open_metrics_log(metrics_path)
 
     # Build the model. Always train in fp32 for stability.
     cfg = Config(dtype=torch.float32, max_seq_len=args.seq_len)
@@ -394,8 +431,15 @@ def main() -> None:
         print("\n[SIGINT] will save and exit at next step boundary...")
     signal.signal(signal.SIGINT, sigint_handler)
 
-    best_val = float("inf")
-    best_step = None
+    # On resume, recover best_val/best_step from the existing metrics log so
+    # we keep tracking the historical best instead of starting from inf.
+    if args.resume is not None:
+        best_val, best_step = recover_best_from_metrics(metrics_path)
+        if best_step is not None:
+            print(f"recovered best so far: val_loss={best_val:.4f} at step {best_step}")
+    else:
+        best_val = float("inf")
+        best_step = None
 
     model.train()
     t_start = time.perf_counter()
@@ -435,6 +479,10 @@ def main() -> None:
                 if is_best:
                     best_val = val
                     best_step = step
+                    # Save best.pt as a regular file (not a symlink) immediately
+                    # at the eval that produced the new best. This avoids the
+                    # eval-vs-save alignment bug.
+                    save_checkpoint(out_dir / "best.pt", model, optimizer, step, cfg)
                 print(f"        val_loss={val:.4f}" + ("  ← best" if is_best else ""))
                 emit(metrics_f, event="eval", step=step, val_loss=val, is_best=is_best)
 
@@ -449,20 +497,8 @@ def main() -> None:
                 ckpt = out_dir / f"step_{step}.pt"
                 save_checkpoint(ckpt, model, optimizer, step, cfg)
                 update_symlink(out_dir, "latest.pt", ckpt)
-                # If our best-val step is this step (or a recent saved one),
-                # update best.pt. Most accurate when eval_every divides save_every.
-                if best_step == step:
-                    update_symlink(out_dir, "best.pt", ckpt)
-                # Pruning: protect best.pt's target.
-                protected = set()
-                best_link = out_dir / "best.pt"
-                if best_link.is_symlink():
-                    protected.add(best_link.resolve().name)
-                pruned = prune_old_checkpoints(out_dir, args.keep_last, protected)
-                msg = f"        saved {ckpt.name}  (latest -> {ckpt.name}"
-                if (out_dir / "best.pt").is_symlink():
-                    msg += f", best -> {(out_dir / 'best.pt').resolve().name}"
-                msg += ")"
+                pruned = prune_old_checkpoints(out_dir, args.keep_last)
+                msg = f"        saved {ckpt.name}  (latest -> {ckpt.name})"
                 if pruned:
                     msg += f"  pruned {len(pruned)}"
                 print(msg)
@@ -482,22 +518,24 @@ def main() -> None:
         elif n_done > 0:
             print(f"\ndone — {n_done} steps in {elapsed:.1f}s "
                   f"({n_done / elapsed:.2f} steps/s)")
+            # Avoid a duplicate save when the loop's final iteration already
+            # saved this step (i.e. last_step_done % save_every == 0).
             final = out_dir / f"step_{last_step_done}.pt"
-            save_checkpoint(final, model, optimizer, last_step_done, cfg)
-            update_symlink(out_dir, "latest.pt", final)
-            protected = set()
-            best_link = out_dir / "best.pt"
-            if best_link.is_symlink():
-                protected.add(best_link.resolve().name)
-            prune_old_checkpoints(out_dir, args.keep_last, protected)
+            if not final.exists():
+                save_checkpoint(final, model, optimizer, last_step_done, cfg)
+                update_symlink(out_dir, "latest.pt", final)
+                prune_old_checkpoints(out_dir, args.keep_last)
             print(f"final checkpoint: {final.name}")
             if best_step is not None:
-                print(f"best val_loss={best_val:.4f} at step {best_step} "
-                      f"({(out_dir / 'best.pt').resolve().name})")
+                print(f"best val_loss={best_val:.4f} at step {best_step} (best.pt)")
             emit(metrics_f, event="end", step=last_step_done, elapsed_s=elapsed,
                  best_val=best_val if best_step else None,
                  best_step=best_step)
         metrics_f.close()
+        # Restore stdout/stderr and close the log file.
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+        log_file.close()
 
 
 if __name__ == "__main__":
