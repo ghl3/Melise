@@ -17,7 +17,7 @@ class Config:
     vocab_size: int = 256
     d_model: int = 512
     n_layers: int = 4
-    max_seq_len: int = 128
+    max_seq_len: int = 512
 
     # Attention (GQA: n_q_heads = n_heads, n_kv_heads <= n_heads).
     n_heads: int = 16

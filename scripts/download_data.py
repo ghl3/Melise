@@ -13,6 +13,11 @@ Available datasets:
     origin-species     Darwin, On the Origin of Species              ~950 KB
     decline-fall-1     Gibbon, Decline and Fall, Volume 1            ~1.8 MB
     wealth-of-nations  Adam Smith, The Wealth of Nations             ~2.4 MB
+    huckleberry-finn   Twain, Adventures of Huckleberry Finn         ~600 KB
+    tale-two-cities    Dickens, A Tale of Two Cities                 ~800 KB
+    treasure-island    Stevenson, Treasure Island                    ~400 KB
+    wizard-of-oz       Baum, The Wonderful Wizard of Oz              ~250 KB
+    walden             Thoreau, Walden                               ~600 KB
 
 Examples:
     .venv/bin/python scripts/download_data.py
@@ -95,6 +100,31 @@ DATASETS: dict[str, tuple[str, str, str]] = {
     "wealth-of-nations": (
         "https://www.gutenberg.org/files/3300/3300-0.txt",
         "wealth_of_nations.txt",
+        "gutenberg",
+    ),
+    "huckleberry-finn": (
+        "https://www.gutenberg.org/files/76/76-0.txt",
+        "huckleberry_finn.txt",
+        "gutenberg",
+    ),
+    "tale-two-cities": (
+        "https://www.gutenberg.org/files/98/98-0.txt",
+        "tale_of_two_cities.txt",
+        "gutenberg",
+    ),
+    "treasure-island": (
+        "https://www.gutenberg.org/files/120/120-0.txt",
+        "treasure_island.txt",
+        "gutenberg",
+    ),
+    "wizard-of-oz": (
+        "https://www.gutenberg.org/files/55/55-0.txt",
+        "wizard_of_oz.txt",
+        "gutenberg",
+    ),
+    "walden": (
+        "https://www.gutenberg.org/files/205/205-0.txt",
+        "walden.txt",
         "gutenberg",
     ),
 }

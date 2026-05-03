@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--steps", type=int, default=500,
                    help="Total training steps (target — counts steps from any resumed checkpoint)")
     g.add_argument("--batch-size", type=int, default=16)
-    g.add_argument("--seq-len", type=int, default=128, help="Sequence length per batch")
+    g.add_argument("--seq-len", type=int, default=512, help="Sequence length per batch")
     g.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     g.add_argument("--weight-decay", type=float, default=0.1)
     g.add_argument("--grad-clip", type=float, default=1.0, help="Max gradient norm")
