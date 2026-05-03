@@ -172,6 +172,21 @@ def download_one(name: str, force: bool) -> Path:
     return path
 
 
+def sweep_stale_tmp_files() -> int:
+    """Remove *.tmp files left behind by previous interrupted downloads.
+
+    Our tempfile cleanup lives in a `finally` block, which handles normal
+    exits and exceptions but not SIGKILL. Sweeping at startup keeps the
+    data dir tidy across kills."""
+    if not DATA_DIR.exists():
+        return 0
+    n = 0
+    for p in DATA_DIR.glob("*.tmp"):
+        p.unlink(missing_ok=True)
+        n += 1
+    return n
+
+
 def main() -> None:
     args = parse_args()
 
@@ -187,6 +202,10 @@ def main() -> None:
         names = args.dataset
     else:
         names = ["shakespeare"]
+
+    n_stale = sweep_stale_tmp_files()
+    if n_stale:
+        print(f"swept {n_stale} stale .tmp file(s)")
 
     print(f"target: {len(names)} dataset(s) -> {DATA_DIR.relative_to(PROJECT_ROOT)}/")
     for name in names:
