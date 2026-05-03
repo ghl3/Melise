@@ -18,6 +18,10 @@ Available datasets:
     treasure-island    Stevenson, Treasure Island                    ~400 KB
     wizard-of-oz       Baum, The Wonderful Wizard of Oz              ~250 KB
     walden             Thoreau, Walden                               ~600 KB
+    anna-karenina      Tolstoy (Garnett tr.), Anna Karenina          ~2.0 MB
+    david-copperfield  Dickens, David Copperfield                    ~1.9 MB
+    voyage-beagle      Darwin, Voyage of the Beagle                  ~1.0 MB
+    meditations        Marcus Aurelius (Long tr.), Meditations       ~300 KB
 
 Examples:
     .venv/bin/python scripts/download_data.py
@@ -125,6 +129,26 @@ DATASETS: dict[str, tuple[str, str, str]] = {
     "walden": (
         "https://www.gutenberg.org/files/205/205-0.txt",
         "walden.txt",
+        "gutenberg",
+    ),
+    "anna-karenina": (
+        "https://www.gutenberg.org/files/1399/1399-0.txt",
+        "anna_karenina.txt",
+        "gutenberg",
+    ),
+    "david-copperfield": (
+        "https://www.gutenberg.org/files/766/766-0.txt",
+        "david_copperfield.txt",
+        "gutenberg",
+    ),
+    "voyage-beagle": (
+        "https://www.gutenberg.org/files/944/944-0.txt",
+        "voyage_of_the_beagle.txt",
+        "gutenberg",
+    ),
+    "meditations": (
+        "https://www.gutenberg.org/files/2680/2680-0.txt",
+        "meditations.txt",
         "gutenberg",
     ),
 }
