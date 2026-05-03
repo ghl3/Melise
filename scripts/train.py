@@ -80,9 +80,14 @@ def parse_args() -> argparse.Namespace:
 
     # Data
     g = p.add_argument_group("data")
-    g.add_argument("--data", type=Path, default=PROJECT_ROOT / "data" / "tinyshakespeare.txt")
+    g.add_argument("--data", action="append", type=Path, default=None,
+                   help="Path to a training corpus. Repeat to train on a mixture. "
+                        "Default: data/tinyshakespeare.txt")
+    g.add_argument("--data-weights", type=str, default=None,
+                   help="Comma-separated sampling weights, one per --data. "
+                        "Default: weight by dataset byte size.")
     g.add_argument("--val-frac", type=float, default=0.05,
-                   help="Fraction of dataset held out for evaluation")
+                   help="Fraction of each dataset held out for evaluation")
 
     # Misc
     g = p.add_argument_group("misc")
@@ -94,35 +99,87 @@ def parse_args() -> argparse.Namespace:
 
 # ---------- Data ----------
 
-def load_data(path: Path, device: torch.device, val_frac: float) -> tuple[torch.Tensor, torch.Tensor]:
-    """Read raw bytes; split into train and val (val = last `val_frac` of the file)."""
-    if not path.exists():
-        raise FileNotFoundError(f"{path} not found. Run scripts/download_data.py first.")
-    raw = path.read_bytes()
-    data = torch.tensor(list(raw), dtype=torch.long, device=device)
-    n_val = max(int(len(data) * val_frac), 1)
-    return data[:-n_val], data[-n_val:]
+def load_data(
+    paths: list[Path], device: torch.device, val_frac: float
+) -> tuple[list[torch.Tensor], list[torch.Tensor], list[int]]:
+    """Read each corpus as raw bytes; split each into train/val.
+
+    Returns three parallel lists: train tensors, val tensors, byte counts.
+    """
+    train_list, val_list, byte_counts = [], [], []
+    for path in paths:
+        if not path.exists():
+            raise FileNotFoundError(
+                f"{path} not found. Run scripts/download_data.py first."
+            )
+        raw = path.read_bytes()
+        data = torch.tensor(list(raw), dtype=torch.long, device=device)
+        n_val = max(int(len(data) * val_frac), 1)
+        train_list.append(data[:-n_val])
+        val_list.append(data[-n_val:])
+        byte_counts.append(len(raw))
+    return train_list, val_list, byte_counts
 
 
-def get_batch(data: torch.Tensor, batch_size: int, seq_len: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """Random crops with shifted targets."""
-    starts = torch.randint(0, data.shape[0] - seq_len - 1, (batch_size,), device=data.device)
-    inputs = torch.stack([data[s : s + seq_len] for s in starts])
-    targets = torch.stack([data[s + 1 : s + 1 + seq_len] for s in starts])
-    return inputs, targets
+def get_batch(
+    datasets: list[torch.Tensor],
+    weights: torch.Tensor,
+    batch_size: int,
+    seq_len: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample a batch from a mixture of datasets.
+
+    Each example in the batch is drawn from a single dataset chosen
+    independently according to `weights` (which can be unnormalized).
+    Multinomial sampling normalizes implicitly.
+    """
+    if len(datasets) == 1:
+        d = datasets[0]
+        starts = torch.randint(0, d.shape[0] - seq_len - 1, (batch_size,), device=d.device)
+        inputs = torch.stack([d[s : s + seq_len] for s in starts])
+        targets = torch.stack([d[s + 1 : s + 1 + seq_len] for s in starts])
+        return inputs, targets
+
+    chosen = torch.multinomial(weights, batch_size, replacement=True).tolist()
+    inputs, targets = [], []
+    for d_idx in chosen:
+        d = datasets[d_idx]
+        s = int(torch.randint(0, d.shape[0] - seq_len - 1, (1,)).item())
+        inputs.append(d[s : s + seq_len])
+        targets.append(d[s + 1 : s + 1 + seq_len])
+    return torch.stack(inputs), torch.stack(targets)
+
+
+def parse_weights(weights_str: str | None, byte_counts: list[int]) -> torch.Tensor:
+    """Compute mixture weights: explicit if given, else proportional to size."""
+    if weights_str is None:
+        return torch.tensor([float(b) for b in byte_counts])
+    weights = [float(w) for w in weights_str.split(",")]
+    if len(weights) != len(byte_counts):
+        raise SystemExit(
+            f"--data-weights has {len(weights)} entries; "
+            f"--data has {len(byte_counts)}. Counts must match."
+        )
+    return torch.tensor(weights)
 
 
 # ---------- Eval & sampling ----------
 
 @torch.no_grad()
-def eval_loss(model: TransformerLM, val_data: torch.Tensor, batch_size: int,
-              seq_len: int, n_batches: int) -> float:
-    """Average cross-entropy over `n_batches` random val crops."""
+def eval_loss(
+    model: TransformerLM,
+    val_datasets: list[torch.Tensor],
+    weights: torch.Tensor,
+    batch_size: int,
+    seq_len: int,
+    n_batches: int,
+) -> float:
+    """Average cross-entropy over `n_batches` random val crops, mixed by `weights`."""
     was_training = model.training
     model.eval()
     total = 0.0
     for _ in range(n_batches):
-        inputs, targets = get_batch(val_data, batch_size, seq_len)
+        inputs, targets = get_batch(val_datasets, weights, batch_size, seq_len)
         logits = model(inputs)
         loss = F.cross_entropy(logits.view(-1, model.cfg.vocab_size), targets.view(-1))
         total += loss.item()
@@ -228,8 +285,18 @@ def main() -> None:
               f"Pass a higher --steps to continue training.")
         return
 
-    train_data, val_data = load_data(args.data, device, args.val_frac)
-    print(f"train: {train_data.numel():,} bytes  val: {val_data.numel():,} bytes")
+    if not args.data:
+        args.data = [PROJECT_ROOT / "data" / "tinyshakespeare.txt"]
+
+    train_data, val_data, byte_counts = load_data(args.data, device, args.val_frac)
+    weights = parse_weights(args.data_weights, byte_counts)
+    norm_weights = weights / weights.sum()
+
+    print(f"datasets ({len(args.data)}):")
+    for path, n_bytes, w in zip(args.data, byte_counts, norm_weights.tolist()):
+        rel = path.relative_to(PROJECT_ROOT) if path.is_absolute() else path
+        print(f"  {str(rel):<40}  {n_bytes:>10,} bytes  ({w * 100:>5.1f}% sampling)")
+
     print(f"training from step {start_step + 1} to {args.steps} "
           f"(batch={args.batch_size}, seq_len={args.seq_len}, lr={args.lr})")
     print(f"output dir: {args.out}")
@@ -242,7 +309,7 @@ def main() -> None:
     n_done = 0
 
     for step in range(start_step + 1, args.steps + 1):
-        inputs, targets = get_batch(train_data, args.batch_size, args.seq_len)
+        inputs, targets = get_batch(train_data, weights, args.batch_size, args.seq_len)
 
         logits = model(inputs)
         loss = F.cross_entropy(logits.view(-1, cfg.vocab_size), targets.view(-1))
@@ -259,7 +326,7 @@ def main() -> None:
             print(f"step {step:>5}/{args.steps}  train_loss={loss.item():.4f}  ({tps:>6.0f} tok/s)")
 
         if step % args.eval_every == 0:
-            val = eval_loss(model, val_data, args.batch_size, args.seq_len, args.eval_batches)
+            val = eval_loss(model, val_data, weights, args.batch_size, args.seq_len, args.eval_batches)
             print(f"        val_loss={val:.4f}")
 
         if step % args.sample_every == 0 and not args.no_sample:
