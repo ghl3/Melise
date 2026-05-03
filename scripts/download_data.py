@@ -9,8 +9,10 @@ Available datasets:
     moby-dick          Herman Melville, Moby Dick                    ~1.2 MB
     bible-kjv          King James Bible                              ~4.5 MB
     shakespeare-all    Complete Works of Shakespeare (Gutenberg)     ~5.5 MB
-    wikitext2          WikiText-2 (Salesforce, train split, raw)     ~11 MB
     webster            Webster's Unabridged Dictionary (1913)        ~29 MB
+    origin-species     Darwin, On the Origin of Species              ~950 KB
+    decline-fall-1     Gibbon, Decline and Fall, Volume 1            ~1.8 MB
+    wealth-of-nations  Adam Smith, The Wealth of Nations             ~2.4 MB
 
 Examples:
     .venv/bin/python scripts/download_data.py
@@ -75,17 +77,24 @@ DATASETS: dict[str, tuple[str, str, str]] = {
         "shakespeare_complete.txt",
         "gutenberg",
     ),
-    "wikitext2": (
-        # Salesforce's original S3 bucket is gone; this mirror in pytorch/examples
-        # (the tokenized — not raw — version, with rare words replaced by `<unk>`).
-        # For byte-level training the difference is minor.
-        "https://raw.githubusercontent.com/pytorch/examples/main/word_language_model/data/wikitext-2/train.txt",
-        "wikitext2.txt",
-        "raw",
-    ),
     "webster": (
         "https://www.gutenberg.org/cache/epub/29765/pg29765.txt",
         "webster_dictionary.txt",
+        "gutenberg",
+    ),
+    "origin-species": (
+        "https://www.gutenberg.org/files/1228/1228-0.txt",
+        "origin_of_species.txt",
+        "gutenberg",
+    ),
+    "decline-fall-1": (
+        "https://www.gutenberg.org/files/731/731-0.txt",
+        "decline_and_fall_v1.txt",
+        "gutenberg",
+    ),
+    "wealth-of-nations": (
+        "https://www.gutenberg.org/files/3300/3300-0.txt",
+        "wealth_of_nations.txt",
         "gutenberg",
     ),
 }
