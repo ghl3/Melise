@@ -10,6 +10,7 @@ Available datasets:
     bible-kjv          King James Bible                              ~4.5 MB
     shakespeare-all    Complete Works of Shakespeare (Gutenberg)     ~5.5 MB
     wikitext2          WikiText-2 (Salesforce, train split, raw)     ~11 MB
+    webster            Webster's Unabridged Dictionary (1913)        ~29 MB
 
 Examples:
     .venv/bin/python scripts/download_data.py
@@ -81,6 +82,11 @@ DATASETS: dict[str, tuple[str, str, str]] = {
         "https://raw.githubusercontent.com/pytorch/examples/main/word_language_model/data/wikitext-2/train.txt",
         "wikitext2.txt",
         "raw",
+    ),
+    "webster": (
+        "https://www.gutenberg.org/cache/epub/29765/pg29765.txt",
+        "webster_dictionary.txt",
+        "gutenberg",
     ),
 }
 

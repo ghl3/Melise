@@ -75,7 +75,7 @@ def parse_args() -> argparse.Namespace:
                    help="Checkpoint output directory")
     g.add_argument("--resume", type=Path, default=None,
                    help="Path to a checkpoint to resume from")
-    g.add_argument("--keep-last", type=int, default=3,
+    g.add_argument("--keep-last", type=int, default=5,
                    help="Keep only the N most recent checkpoints (0 = keep all)")
 
     # Data
