@@ -326,7 +326,14 @@ def parse_args() -> argparse.Namespace:
         "is byte_size × multiplier (default multiplier 1.0, i.e. naive "
         "byte-size weighting). Mutually exclusive with --data/--data-weights.",
     )
-    g.add_argument("--val-frac", type=float, default=0.05)
+    g.add_argument(
+        "--val-frac",
+        type=float,
+        default=0.05,
+        help="Legacy --data runs only: hold out the last fraction of every "
+        "file for validation. --data-mix runs use the config's per-file "
+        "\"splits\" instead (files without one train on 100%% of their bytes).",
+    )
 
     g = p.add_argument_group("misc")
     g.add_argument("--seed", type=int, default=0)
@@ -393,11 +400,18 @@ def restore_rng_state(state: dict | None, device: torch.device) -> bool:
 # ---------- Data ----------
 
 
-def load_data(paths, device, val_frac):
+def load_data(paths, device, splits):
     """Load each corpus as a uint8 tensor (1 byte per token). Batches are
     cast to int64 on the fly in get_batch — storing the corpora themselves
-    as int64 would be 8× the memory (WikiText-103 alone would be ~4.3 GB)."""
-    train_list, val_list, byte_counts = [], [], []
+    as int64 would be 8× the memory (WikiText-103 alone would be ~4.3 GB).
+
+    `splits` maps path → (train_frac, val_frac). Files without an entry
+    train on 100% of their bytes and contribute nothing to validation.
+    Any remainder after train+val (e.g. enwik8's canonical last-5% test
+    split) is NEVER loaded here — it stays untouched for offline evals.
+    """
+    train_list, byte_counts = [], []
+    val_list, val_bytes = [], []
     for path in paths:
         if not path.exists():
             raise FileNotFoundError(
@@ -405,11 +419,16 @@ def load_data(paths, device, val_frac):
             )
         raw = path.read_bytes()
         data = torch.frombuffer(bytearray(raw), dtype=torch.uint8).to(device)
-        n_val = max(int(len(data) * val_frac), 1)
-        train_list.append(data[:-n_val])
-        val_list.append(data[-n_val:])
+        train_frac, val_frac = splits.get(path, (1.0, 0.0))
+        n = data.shape[0]
+        train_end = int(n * train_frac)
+        val_end = train_end + int(n * val_frac)
+        train_list.append(data[:train_end])
+        if val_end > train_end:
+            val_list.append(data[train_end:val_end])
+            val_bytes.append(val_end - train_end)
         byte_counts.append(len(raw))
-    return train_list, val_list, byte_counts
+    return train_list, val_list, val_bytes, byte_counts
 
 
 def get_batch(datasets, weights, batch_size, seq_len):
@@ -444,14 +463,20 @@ def parse_weights(weights_str, byte_counts):
 
 
 def load_data_mix(mix_path):
-    """Read a mixture config: which files to train on and a per-file
-    sampling-weight multiplier on top of naive byte-size weighting.
+    """Read a mixture config: which files to train on, per-file
+    sampling-weight multipliers, and per-file train/val/test splits.
 
-        {"include": "data/*.txt",                       # glob or list of globs
-         "multipliers": {"data/enwik8.txt": 0.1}}       # default 1.0
+        {"include": "data/*.txt",                     # glob or list of globs
+         "multipliers": {"data/enwik8.txt": 0.1},     # default 1.0
+         "splits": {                                  # default: 100% train
+            "data/enwik8.txt": {"train": 0.90, "val": 0.05, "test": 0.05}}}
 
-    Returns (paths, multipliers) with multipliers aligned to paths.
-    Multiplier keys may be project-relative paths or bare filenames.
+    Files without a "splits" entry train on all of their bytes. The test
+    fraction is reserved — train.py never loads it (offline evals do).
+
+    Returns (paths, multipliers, splits) with multipliers aligned to
+    paths and splits keyed by path. Keys may be project-relative paths or
+    bare filenames.
     """
     mix = json.loads(mix_path.read_text())
     includes = mix.get("include", "data/*.txt")
@@ -461,24 +486,41 @@ def load_data_mix(mix_path):
     if not paths:
         raise SystemExit(f"--data-mix: include patterns {includes} matched no files")
 
+    def match(table, matched):
+        """Look up a per-file entry by relative path or filename."""
+        def lookup(p):
+            rel = str(p.relative_to(PROJECT_ROOT))
+            for key in (rel, p.name):
+                if key in table:
+                    matched.add(key)
+                    return table[key]
+            return None
+        return lookup
+
     raw_mults = dict(mix.get("multipliers", {}))
+    raw_splits = dict(mix.get("splits", {}))
     matched = set()
-    mults = []
+    mult_of = match(raw_mults, matched)
+    split_of = match(raw_splits, matched)
+
+    mults, splits = [], {}
     for p in paths:
-        rel = str(p.relative_to(PROJECT_ROOT))
-        for key in (rel, p.name):
-            if key in raw_mults:
-                mults.append(float(raw_mults[key]))
-                matched.add(key)
-                break
-        else:
-            mults.append(1.0)
-    unmatched = set(raw_mults) - matched
+        m = mult_of(p)
+        mults.append(1.0 if m is None else float(m))
+        s = split_of(p)
+        if s is not None:
+            train, val = float(s.get("train", 1.0)), float(s.get("val", 0.0))
+            test = float(s.get("test", 0.0))
+            if train + val + test > 1.0 + 1e-9:
+                raise SystemExit(f"--data-mix: splits for {p.name} sum to > 1")
+            splits[p] = (train, val)
+
+    unmatched = (set(raw_mults) | set(raw_splits)) - matched
     if unmatched:
         raise SystemExit(
-            f"--data-mix: multiplier keys match no included file: {sorted(unmatched)}"
+            f"--data-mix: keys match no included file: {sorted(unmatched)}"
         )
-    return paths, mults
+    return paths, mults, splits
 
 
 # ---------- MoE routing monitor ----------
@@ -814,20 +856,28 @@ def main() -> None:
         return
 
     mix_mults = None
+    splits = None
     if args.data_mix is not None:
         if args.data or args.data_weights:
             raise SystemExit("--data-mix is mutually exclusive with --data/--data-weights")
-        args.data, mix_mults = load_data_mix(args.data_mix)
+        args.data, mix_mults, splits = load_data_mix(args.data_mix)
         print(f"data mix: {args.data_mix} ({len(args.data)} files)")
     if not args.data:
         args.data = [PROJECT_ROOT / "data" / "tinyshakespeare.txt"]
+    if splits is None:
+        # Legacy --data path: hold out the last val_frac of every file.
+        splits = {p: (1.0 - args.val_frac, args.val_frac) for p in args.data}
 
-    train_data, val_data, byte_counts = load_data(args.data, device, args.val_frac)
+    train_data, val_data, val_bytes, byte_counts = load_data(args.data, device, splits)
     if mix_mults is not None:
         weights = torch.tensor([b * m for b, m in zip(byte_counts, mix_mults)])
     else:
         weights = parse_weights(args.data_weights, byte_counts)
     norm_weights = weights / weights.sum()
+    # Val batches are drawn from the val slices only, weighted by their size.
+    val_weights = torch.tensor([float(b) for b in val_bytes]) if val_bytes else None
+    if val_weights is None:
+        print("note: no file defines a val split — skipping evals and best.pt tracking")
 
     print(f"datasets ({len(args.data)}):")
     for path, n_bytes, w in zip(args.data, byte_counts, norm_weights.tolist()):
@@ -836,7 +886,14 @@ def main() -> None:
             if path.is_absolute() and path.is_relative_to(PROJECT_ROOT)
             else path
         )
-        print(f"  {str(rel):<42}  {n_bytes:>10,} bytes  ({w * 100:>5.1f}% sampling)")
+        train_frac, val_frac = splits.get(path, (1.0, 0.0))
+        note = ""
+        if (train_frac, val_frac) != (1.0, 0.0):
+            test_frac = 1.0 - train_frac - val_frac
+            note = f"  [train {train_frac:.0%} / val {val_frac:.0%}" + (
+                f" / test {test_frac:.0%} reserved]" if test_frac > 1e-9 else "]"
+            )
+        print(f"  {str(rel):<42}  {n_bytes:>10,} bytes  ({w * 100:>5.1f}% sampling){note}")
 
     # Run manifest (only on first start; preserves original on resume).
     manifest_path = out_dir / "run.json"
@@ -976,11 +1033,11 @@ def main() -> None:
                     for name, span in monitor.bias_spans.items():
                         writer.add_scalar(f"moe/{name}_bias_span", span, step)
 
-            if step % args.eval_every == 0:
+            if step % args.eval_every == 0 and val_weights is not None:
                 val = eval_loss(
                     model,
                     val_data,
-                    weights,
+                    val_weights,
                     args.batch_size,
                     args.seq_len,
                     args.eval_batches,

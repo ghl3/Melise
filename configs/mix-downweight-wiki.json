@@ -4,5 +4,8 @@
     "data/wikitext103_train.txt": 0.1,
     "data/enwik8.txt": 0.1,
     "data/webster_dictionary.txt": 0.1
+  },
+  "splits": {
+    "data/enwik8.txt": {"train": 0.9, "val": 0.05, "test": 0.05}
   }
 }
