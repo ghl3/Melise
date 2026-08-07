@@ -33,12 +33,21 @@ Output (K3 Eq. 6): head-wise RMSNorm on the memory readout, then a
 full-rank sigmoid gate (input-dependent), then the output projection —
 y = W_o[sigmoid(W_g x) ⊙ RMSNorm(o)].
 
-This implementation runs the recurrence as an explicit sequential scan
-over time, vectorized across batch and heads, in fp32. Production
-implementations (FLA, Kimi's kernels) use a chunkwise-parallel form (K3
-Eq. 3–4) that is mathematically equivalent but tensor-core friendly; the
-scan is the honest reference version, so prefer modest seq_len when
-training KDA layers.
+Two execution paths:
+
+  Reference scan — an explicit sequential loop over time, vectorized
+    across batch and heads, in fp32. Always used on CPU/MPS and for
+    cached decoding. Honest but launch-bound: ~8 tiny kernels per token
+    per layer, and the autograd graph keeps every step alive.
+
+  Chunkwise kernel — when CUDA and the flash-linear-attention library
+    are available, training forwards use fla's `chunk_kda` Triton kernel:
+    the mathematically equivalent chunk-parallel form (K3 Eq. 3–4) that
+    keeps tensor cores busy and recomputes inside the kernel instead of
+    storing per-step autograd state. Orders of magnitude faster and far
+    smaller activation memory. Set KDA_FORCE_SCAN=1 to disable (used by
+    the equivalence test). Note fla defaults to scale=1/sqrt(d_k) on
+    queries; our formulation is unscaled, so we pass scale=1.0.
 
 The inference cache is O(1) in sequence length: the state S plus the last
 kernel−1 conv inputs. No KV buffer, no position bookkeeping.
@@ -46,12 +55,19 @@ kernel−1 conv inputs. No KV buffer, no position bookkeeping.
 
 from __future__ import annotations
 
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from ..norm import RMSNorm
 from .cache import KDALayerCache, ModelCache
+
+try:  # optional chunkwise CUDA kernels (pip install flash-linear-attention)
+    from fla.ops.kda import chunk_kda
+except Exception:  # not installed, or platform without triton
+    chunk_kda = None
 
 
 class KimiDeltaAttention(nn.Module):
@@ -137,14 +153,16 @@ class KimiDeltaAttention(nn.Module):
         new_tail = full[:, :, full.shape[-1] - (self.conv_kernel - 1) :]
         return out.transpose(1, 2), new_tail
 
-    def _decay(self, x: torch.Tensor) -> torch.Tensor:
-        """Per-channel retention factor α ∈ (e^{g_min}, 1), shape (B, S, H, Dk)."""
+    def _log_decay(self, x: torch.Tensor) -> torch.Tensor:
+        """Per-channel log-decay g ∈ (g_min, 0), shape (B, S, H, Dk), fp32.
+
+        The retention factor is α = e^g ∈ (e^{g_min}, 1). The scan path
+        exponentiates; the chunkwise kernel consumes g directly."""
         B, S, _ = x.shape
         z = (self.a_up(self.a_down(x)) + self.a_bias).float()     # (B, S, H·Dk)
         z = z.view(B, S, self.n_heads, self.d_k)
         scale = self.a_log_scale.exp().view(1, 1, self.n_heads, 1)
-        g = self.g_min * torch.sigmoid(scale * z)                 # (g_min, 0)
-        return g.exp()
+        return self.g_min * torch.sigmoid(scale * z)              # (g_min, 0)
 
     @staticmethod
     def _scan(
@@ -191,27 +209,43 @@ class KimiDeltaAttention(nn.Module):
         v, tail_v = self._short_conv(self.v_conv, self.v_proj(x), layer.conv_v if layer else None)
 
         def heads(t: torch.Tensor, d: int) -> torch.Tensor:
-            return t.view(B, S, H, d).transpose(1, 2).float()     # (B, H, S, d)
+            return t.view(B, S, H, d).float()                     # (B, S, H, d)
 
         q = F.normalize(heads(F.silu(q), Dk), dim=-1, eps=1e-6)
         k = F.normalize(heads(F.silu(k), Dk), dim=-1, eps=1e-6)
         v = heads(F.silu(v), Dv)
+        g = self._log_decay(x)                                    # (B, S, H, Dk) fp32
+        beta = torch.sigmoid(self.beta_proj(x).float())           # (B, S, H)
 
-        alpha = self._decay(x).transpose(1, 2)                    # (B, H, S, Dk) fp32
-        beta = torch.sigmoid(self.beta_proj(x).float()).transpose(1, 2)  # (B, H, S)
-
-        state = (
-            layer.state
-            if layer is not None
-            else torch.zeros(B, H, Dk, Dv, device=x.device, dtype=torch.float32)
+        use_kernel = (
+            chunk_kda is not None
+            and x.is_cuda
+            and layer is None                     # decode steps stay on the scan
+            and os.environ.get("KDA_FORCE_SCAN") != "1"
         )
-        out, final_state = self._scan(q, k, v, alpha, beta, state)
-        if layer is not None:
-            layer.state = final_state
-            layer.conv_q, layer.conv_k, layer.conv_v = tail_q, tail_k, tail_v
+        if use_kernel:
+            # fla expects seq-first [B, T, H, ·] — exactly our layout. scale=1.0
+            # because our formulation reads the memory with unscaled queries.
+            out, _ = chunk_kda(
+                q=q, k=k, v=v, g=g, beta=beta,
+                scale=1.0, initial_state=None, output_final_state=False,
+            )                                                      # (B, S, H, Dv)
+            out = self.out_norm(out).to(x.dtype).reshape(B, S, H * Dv)
+        else:
+            state = (
+                layer.state
+                if layer is not None
+                else torch.zeros(B, H, Dk, Dv, device=x.device, dtype=torch.float32)
+            )
+            out, final_state = self._scan(
+                q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
+                g.transpose(1, 2).exp(), beta.transpose(1, 2), state,
+            )                                                      # (B, H, S, Dv)
+            if layer is not None:
+                layer.state = final_state
+                layer.conv_q, layer.conv_k, layer.conv_v = tail_q, tail_k, tail_v
+            out = self.out_norm(out).to(x.dtype).transpose(1, 2).reshape(B, S, H * Dv)
 
-        # Head-wise RMSNorm, input-dependent sigmoid gate, output projection.
-        out = self.out_norm(out).to(x.dtype)                      # (B, H, S, Dv)
-        out = out.transpose(1, 2).reshape(B, S, H * Dv)
+        # Input-dependent sigmoid gate, output projection.
         out = torch.sigmoid(self.gate_proj(x)) * out
         return self.o_proj(out)

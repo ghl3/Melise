@@ -725,6 +725,9 @@ def main() -> None:
     args = parse_args()
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
+    # TF32 matmuls on Ampere+ — big speedup for fp32 training, negligible
+    # precision cost. No-op on non-CUDA devices.
+    torch.set_float32_matmul_precision("high")
 
     # Build the model BEFORE resolving the run dir — auto-generated run
     # names lead with the preset and parameter count. On a fresh run the

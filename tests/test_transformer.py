@@ -120,7 +120,7 @@ def test_kda_decay_bounds():
     g_min = -5.0
     kda = KimiDeltaAttention(32, 2, decay_rank=8, g_min=g_min)
     x = torch.randn(2, 10, 32) * 3
-    alpha = kda._decay(x)
+    alpha = kda._log_decay(x).exp()
     lower = torch.tensor(g_min).exp().item()
     assert (alpha > lower - 1e-6).all(), "decay below e^{g_min}"
     assert (alpha < 1.0).all(), "decay must stay < 1"

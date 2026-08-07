@@ -37,10 +37,20 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 
 class AttentionResiduals(nn.Module):
-    """Learnable pseudo-queries over module outputs (full AttnRes)."""
+    """Learnable pseudo-queries over module outputs (full AttnRes).
+
+    Memory note: the mix stacks all preceding outputs, and doing that at
+    every stage would retain O(L²·B·S·D) of autograd intermediates — at
+    depth 35 that is tens of GB. The mixing math is trivially cheap, so
+    during training we gradient-checkpoint it: backward recomputes the
+    stack/normalize/softmax instead of storing them, keeping the true
+    cost at the O(L·B·S·D) of the stage outputs themselves (which the
+    architecture needs alive regardless).
+    """
 
     def __init__(self, d_model: int, n_stages: int):
         super().__init__()
@@ -53,6 +63,11 @@ class AttentionResiduals(nn.Module):
 
         outputs: list of (B, S, D). Returns (B, S, D).
         """
+        if torch.is_grad_enabled() and self.training:
+            return checkpoint(self._mix, stage_idx, *outputs, use_reentrant=False)
+        return self._mix(stage_idx, *outputs)
+
+    def _mix(self, stage_idx: int, *outputs: torch.Tensor) -> torch.Tensor:
         stack = torch.stack(outputs)                               # (n, B, S, D)
         q = self.queries[stage_idx].float()
 
