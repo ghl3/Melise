@@ -57,7 +57,9 @@ import argparse
 import json
 import math
 import random
+import shutil
 import signal
+import subprocess
 import sys
 import time
 from dataclasses import asdict, is_dataclass
@@ -273,6 +275,13 @@ def parse_args() -> argparse.Namespace:
         "--no-tensorboard",
         action="store_true",
         help="Disable TensorBoard event files (tb/ subdir)",
+    )
+    g.add_argument(
+        "--no-bucket-sync",
+        action="store_true",
+        help="Don't mirror the run dir (checkpoints, tb, metrics, logs) to "
+        "gs://<bucket>/runs/<run-name>. Sync is on by default whenever "
+        "configs/gcs.json exists and gcloud is on PATH.",
     )
 
     g = p.add_argument_group("checkpointing")
@@ -521,6 +530,60 @@ def load_data_mix(mix_path):
             f"--data-mix: keys match no included file: {sorted(unmatched)}"
         )
     return paths, mults, splits
+
+
+# ---------- Bucket sync ----------
+
+
+class BucketSync:
+    """Mirror the run dir to gs://<bucket>/runs/<run-name> as training goes.
+
+    The bucket is the canonical home of runs: checkpoints, TensorBoard
+    events, metrics.jsonl, train.log all survive the VM, and any
+    TensorBoard host can pull every machine's runs into one view.
+
+    kick() launches a detached `gcloud storage rsync` (training never
+    blocks on uploads; if the previous sync is still running it's skipped
+    — the next kick catches up). Deletions are mirrored so --keep-last
+    pruning applies in the bucket too. finalize() runs one last blocking
+    sync so the final checkpoint always lands.
+
+    latest.pt is excluded: it's a symlink to a step file whose bytes are
+    already uploaded, and rsync would re-upload the full copy each save.
+    """
+
+    def __init__(self, out_dir: Path, enabled: bool):
+        self.out_dir = out_dir
+        self.dest = None
+        self.proc = None
+        gcs_config = PROJECT_ROOT / "configs" / "gcs.json"
+        if enabled and gcs_config.exists() and shutil.which("gcloud"):
+            cfg = json.loads(gcs_config.read_text())
+            self.dest = f"gs://{cfg['bucket']}/runs/{out_dir.name}"
+
+    def _cmd(self) -> list[str]:
+        return [
+            "gcloud", "storage", "rsync", "-r",
+            "--delete-unmatched-destination-objects",
+            "-x", r"^latest\.pt$|.*\.tmp$",
+            str(self.out_dir), self.dest,
+        ]
+
+    def kick(self) -> None:
+        if self.dest is None:
+            return
+        if self.proc is not None and self.proc.poll() is None:
+            return  # previous sync still uploading; next kick catches up
+        self.proc = subprocess.Popen(
+            self._cmd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+    def finalize(self) -> None:
+        if self.dest is None:
+            return
+        if self.proc is not None:
+            self.proc.wait()
+        subprocess.run(self._cmd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 # ---------- MoE routing monitor ----------
@@ -922,6 +985,9 @@ def main() -> None:
     if monitor.names:
         print(f"tracking {len(monitor.names)} MoE layers for load balance")
 
+    sync = BucketSync(out_dir, enabled=not args.no_bucket_sync)
+    print(f"bucket sync: {sync.dest or 'off'}")
+
     print(
         f"training from step {start_step + 1} to {args.steps} "
         f"(batch={args.batch_size}, seq_len={args.seq_len}, lr={args.lr}, "
@@ -1070,6 +1136,7 @@ def main() -> None:
                     writer.add_scalar("val/best", best_val, step)
                     writer.add_scalar("params/global_norm", pnorm, step)
                     writer.flush()
+                sync.kick()
 
             if step % args.sample_every == 0 and not args.no_sample:
                 text = sample_text(
@@ -1104,6 +1171,7 @@ def main() -> None:
                     path=ckpt_path.name,
                     pruned=len(pruned),
                 )
+                sync.kick()
     finally:
         # Always: save an interrupted/final checkpoint so we never lose work.
         elapsed = time.perf_counter() - t_start
@@ -1141,6 +1209,9 @@ def main() -> None:
         if writer is not None:
             writer.close()
         metrics_f.close()
+        # One last blocking sync so the final checkpoint and full logs land
+        # in the bucket before we exit.
+        sync.finalize()
         # Restore stdout/stderr and close the log file.
         sys.stdout = sys.__stdout__
         sys.stderr = sys.__stderr__
