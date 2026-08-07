@@ -1,4 +1,12 @@
-"""Model configuration."""
+"""Model configuration for the base model (models/base.py).
+
+This is the repo's original Config, unchanged: it describes the GQA +
+RoPE + Mixtral-style-MoE architecture that existing checkpoints were
+trained with. The other architectures each carry their own config
+dataclass in their model file (models/vanilla.py, models/deepseek.py,
+models/kimi3.py) — a config here is just the knobs one architecture
+exposes, not a description of which components to assemble.
+"""
 
 from dataclasses import dataclass
 

@@ -3,6 +3,11 @@
 Encodes position by rotating Q and K vectors by an angle proportional to
 their position. Pure functions, no learned parameters. Applied inside
 attention to Q and K only — V is left unrotated.
+
+Used by GQA attention (full head_dim) and by MLA's decoupled-RoPE branch
+(a small qk_rope_head_dim slice). KDA layers and NoPE-mode MLA layers use
+no positional encoding at all — in the Kimi hybrid, KDA's per-channel
+decay carries position implicitly.
 """
 
 import torch
@@ -44,8 +49,9 @@ def apply_rotary(
     """
     x1 = x[..., 0::2]
     x2 = x[..., 1::2]
-    cos = cos[None, None, :, :]
-    sin = sin[None, None, :, :]
+    # Tables are stored in fp32; cast here so a bf16 model stays bf16.
+    cos = cos.to(x.dtype)[None, None, :, :]
+    sin = sin.to(x.dtype)[None, None, :, :]
     rot1 = x1 * cos - x2 * sin
     rot2 = x1 * sin + x2 * cos
     return torch.stack([rot1, rot2], dim=-1).flatten(-2)

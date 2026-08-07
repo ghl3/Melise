@@ -5,6 +5,10 @@ Examples:
     First run (auto-generated run name in checkpoints/):
         .venv/bin/python scripts/train.py --steps 500
 
+    Train the Kimi K3 miniature (KDA runs a sequential scan — prefer a
+    modest --seq-len):
+        .venv/bin/python scripts/train.py --preset kimi3 --seq-len 256 --steps 2000
+
     Custom run name:
         .venv/bin/python scripts/train.py --run-name my-experiment --steps 5000
 
@@ -47,22 +51,63 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import torch
 import torch.nn.functional as F
 
-from transformer import Config, TransformerLM, generate
-
+from transformer import MODELS, generate
 
 # ---------- Auto-naming ----------
 
 _ADJECTIVES = [
-    "calm", "wild", "swift", "bright", "silver", "golden", "stormy",
-    "gentle", "crisp", "frozen", "scarlet", "dusky", "frosty", "sunny",
-    "quiet", "fierce", "eager", "jolly", "hidden", "crystal", "crimson",
-    "ember", "azure", "twilight", "rugged",
+    "calm",
+    "wild",
+    "swift",
+    "bright",
+    "silver",
+    "golden",
+    "stormy",
+    "gentle",
+    "crisp",
+    "frozen",
+    "scarlet",
+    "dusky",
+    "frosty",
+    "sunny",
+    "quiet",
+    "fierce",
+    "eager",
+    "jolly",
+    "hidden",
+    "crystal",
+    "crimson",
+    "ember",
+    "azure",
+    "twilight",
+    "rugged",
 ]
 _NOUNS = [
-    "river", "mountain", "valley", "harbor", "glacier", "cypress",
-    "sparrow", "otter", "wolf", "falcon", "brook", "meadow", "canyon",
-    "lighthouse", "garden", "forest", "owl", "comet", "nova", "dawn",
-    "willow", "raven", "tide", "summit", "dell",
+    "river",
+    "mountain",
+    "valley",
+    "harbor",
+    "glacier",
+    "cypress",
+    "sparrow",
+    "otter",
+    "wolf",
+    "falcon",
+    "brook",
+    "meadow",
+    "canyon",
+    "lighthouse",
+    "garden",
+    "forest",
+    "owl",
+    "comet",
+    "nova",
+    "dawn",
+    "willow",
+    "raven",
+    "tide",
+    "summit",
+    "dell",
 ]
 
 
@@ -81,6 +126,7 @@ def generate_run_name() -> str:
 
 
 # ---------- Tee writer (stdout -> console + file) ----------
+
 
 class Tee:
     """File-like object that writes to multiple streams."""
@@ -101,6 +147,7 @@ class Tee:
 
 # ---------- ETA formatting ----------
 
+
 def fmt_eta(seconds: float) -> str:
     if seconds < 60:
         return f"{seconds:.0f}s"
@@ -113,15 +160,30 @@ def fmt_eta(seconds: float) -> str:
 
 # ---------- CLI ----------
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0],
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
+    g = p.add_argument_group("model")
+    g.add_argument(
+        "--preset",
+        type=str,
+        default="base",
+        choices=sorted(MODELS),
+        help="Architecture to train: base (GQA + MoE), vanilla (MHA + dense), "
+        "deepseek (MLA + DeepSeekMoE), kimi3 (KDA/MLA hybrid + AttnRes + LatentMoE)",
+    )
+
     g = p.add_argument_group("training")
-    g.add_argument("--steps", type=int, default=500,
-                   help="Total training steps (target — counts steps from any resumed checkpoint)")
+    g.add_argument(
+        "--steps",
+        type=int,
+        default=500,
+        help="Total training steps (target — counts steps from any resumed checkpoint)",
+    )
     g.add_argument("--batch-size", type=int, default=16)
     g.add_argument("--seq-len", type=int, default=512, help="Sequence length per batch")
     g.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
@@ -129,32 +191,67 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--grad-clip", type=float, default=1.0, help="Max gradient norm")
 
     g = p.add_argument_group("logging & evaluation")
-    g.add_argument("--log-every", type=int, default=25, help="Log train loss every N steps")
-    g.add_argument("--eval-every", type=int, default=100, help="Run val eval every N steps")
-    g.add_argument("--eval-batches", type=int, default=16,
-                   help="Number of val batches averaged per eval")
-    g.add_argument("--sample-every", type=int, default=100,
-                   help="Generate a sample every N steps")
+    g.add_argument(
+        "--log-every", type=int, default=25, help="Log train loss every N steps"
+    )
+    g.add_argument(
+        "--eval-every", type=int, default=100, help="Run val eval every N steps"
+    )
+    g.add_argument(
+        "--eval-batches",
+        type=int,
+        default=16,
+        help="Number of val batches averaged per eval",
+    )
+    g.add_argument(
+        "--sample-every", type=int, default=100, help="Generate a sample every N steps"
+    )
     g.add_argument("--sample-tokens", type=int, default=200)
     g.add_argument("--sample-prompt", type=str, default="ROMEO:\n")
     g.add_argument("--no-sample", action="store_true")
 
     g = p.add_argument_group("checkpointing")
     g.add_argument("--save-every", type=int, default=100)
-    g.add_argument("--out", type=Path, default=None,
-                   help="Run output directory. Default: checkpoints/{run-name}/")
-    g.add_argument("--run-name", type=str, default=None,
-                   help="Auto-generated if omitted (e.g. 'calm-river-20260503-141522')")
-    g.add_argument("--resume", type=Path, default=None,
-                   help="Path to a checkpoint to resume from (uses its parent dir as --out)")
-    g.add_argument("--keep-last", type=int, default=5,
-                   help="Keep only N most recent checkpoints (best.pt's target is protected)")
+    g.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Run output directory. Default: checkpoints/{run-name}/",
+    )
+    g.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Auto-generated if omitted (e.g. 'calm-river-20260503-141522')",
+    )
+    g.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        help="Path to a checkpoint to resume from (uses its parent dir as --out). "
+        "Must have been trained with the same --preset",
+    )
+    g.add_argument(
+        "--keep-last",
+        type=int,
+        default=5,
+        help="Keep only N most recent checkpoints (best.pt's target is protected)",
+    )
 
     g = p.add_argument_group("data")
-    g.add_argument("--data", action="append", type=Path, default=None,
-                   help="Path to a training corpus. Repeat for mixture training.")
-    g.add_argument("--data-weights", type=str, default=None,
-                   help="Comma-separated sampling weights. Default: weight by byte size.")
+    g.add_argument(
+        "--data",
+        action="append",
+        type=Path,
+        default=None,
+        help="Path to a training corpus. Repeat for mixture training.",
+    )
+    g.add_argument(
+        "--data-weights",
+        type=str,
+        default=None,
+        help="Comma-separated sampling weights. Default: weight by byte size.",
+    )
     g.add_argument("--val-frac", type=float, default=0.05)
 
     g = p.add_argument_group("misc")
@@ -176,6 +273,7 @@ def resolve_run_dir(args: argparse.Namespace) -> Path:
 
 # ---------- Data ----------
 
+
 def load_data(paths, device, val_frac):
     train_list, val_list, byte_counts = [], [], []
     for path in paths:
@@ -195,7 +293,9 @@ def load_data(paths, device, val_frac):
 def get_batch(datasets, weights, batch_size, seq_len):
     if len(datasets) == 1:
         d = datasets[0]
-        starts = torch.randint(0, d.shape[0] - seq_len - 1, (batch_size,), device=d.device)
+        starts = torch.randint(
+            0, d.shape[0] - seq_len - 1, (batch_size,), device=d.device
+        )
         inputs = torch.stack([d[s : s + seq_len] for s in starts])
         targets = torch.stack([d[s + 1 : s + 1 + seq_len] for s in starts])
         return inputs, targets
@@ -223,6 +323,7 @@ def parse_weights(weights_str, byte_counts):
 
 # ---------- Eval & sampling ----------
 
+
 @torch.no_grad()
 def eval_loss(model, val_datasets, weights, batch_size, seq_len, n_batches):
     was_training = model.training
@@ -232,7 +333,9 @@ def eval_loss(model, val_datasets, weights, batch_size, seq_len, n_batches):
         for _ in range(n_batches):
             inputs, targets = get_batch(val_datasets, weights, batch_size, seq_len)
             logits = model(inputs)
-            loss = F.cross_entropy(logits.view(-1, model.cfg.vocab_size), targets.view(-1))
+            loss = F.cross_entropy(
+                logits.view(-1, model.cfg.vocab_size), targets.view(-1)
+            )
             total += loss.item()
         return total / n_batches
     finally:
@@ -247,7 +350,7 @@ def sample_text(model, device, prompt, n_tokens):
     try:
         ids = torch.tensor([list(prompt)], device=device, dtype=torch.long)
         out_ids = generate(model, ids, max_new_tokens=n_tokens)
-        out_bytes = bytes(b if 0 <= b < 256 else 0x3f for b in out_ids)
+        out_bytes = bytes(b if 0 <= b < 256 else 0x3F for b in out_ids)
         full = prompt + out_bytes
         return full.decode("utf-8", errors="replace")
     finally:
@@ -257,11 +360,16 @@ def sample_text(model, device, prompt, n_tokens):
 
 # ---------- Checkpointing ----------
 
+
 def save_checkpoint(path, model, optimizer, step, cfg):
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
-        {"model": model.state_dict(), "optimizer": optimizer.state_dict(),
-         "step": step, "config": cfg},
+        {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "step": step,
+            "config": cfg,
+        },
         path,
     )
 
@@ -328,12 +436,15 @@ def recover_best_from_metrics(metrics_path):
 
 # ---------- Metrics + run manifest ----------
 
+
 def write_run_manifest(path, args, cfg, byte_counts, weights):
     """One-shot snapshot of the run setup. Written at start; never updated."""
     manifest = {
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "run_name": path.parent.name,
-        "args": {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()},
+        "args": {
+            k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()
+        },
         "config": asdict(cfg) if is_dataclass(cfg) else {},
         "config_dtype": str(cfg.dtype),
         "datasets": [
@@ -360,6 +471,7 @@ def emit(metrics_f, **fields):
 
 # ---------- Main ----------
 
+
 def main() -> None:
     args = parse_args()
     torch.manual_seed(args.seed)
@@ -377,15 +489,23 @@ def main() -> None:
     metrics_path = out_dir / "metrics.jsonl"
     metrics_f = open_metrics_log(metrics_path)
 
-    # Build the model. Always train in fp32 for stability.
-    cfg = Config(dtype=torch.float32, max_seq_len=args.seq_len)
-    model = TransformerLM(cfg).to(device)
-    print(f"run dir: {out_dir.relative_to(PROJECT_ROOT) if out_dir.is_relative_to(PROJECT_ROOT) else out_dir}")
-    print(f"model:   {model.num_parameters():,} params, dtype={cfg.dtype}, device={device}")
+    # Build the model from its preset. Always train in fp32 for stability.
+    config_cls, model_cls = MODELS[args.preset]
+    cfg = config_cls(dtype=torch.float32, max_seq_len=args.seq_len)
+    model = model_cls(cfg).to(device)
+    print(
+        f"run dir: {out_dir.relative_to(PROJECT_ROOT) if out_dir.is_relative_to(PROJECT_ROOT) else out_dir}"
+    )
+    print(
+        f"model:   {args.preset} ({model_cls.__name__}), {model.num_parameters():,} params, "
+        f"dtype={cfg.dtype}, device={device}"
+    )
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=args.lr, weight_decay=args.weight_decay, betas=(0.9, 0.95),
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        betas=(0.9, 0.95),
     )
 
     start_step = 0
@@ -407,7 +527,11 @@ def main() -> None:
 
     print(f"datasets ({len(args.data)}):")
     for path, n_bytes, w in zip(args.data, byte_counts, norm_weights.tolist()):
-        rel = path.relative_to(PROJECT_ROOT) if path.is_absolute() and path.is_relative_to(PROJECT_ROOT) else path
+        rel = (
+            path.relative_to(PROJECT_ROOT)
+            if path.is_absolute() and path.is_relative_to(PROJECT_ROOT)
+            else path
+        )
         print(f"  {str(rel):<42}  {n_bytes:>10,} bytes  ({w * 100:>5.1f}% sampling)")
 
     # Run manifest (only on first start; preserves original on resume).
@@ -415,20 +539,31 @@ def main() -> None:
     if not manifest_path.exists():
         write_run_manifest(manifest_path, args, cfg, byte_counts, norm_weights)
 
-    print(f"training from step {start_step + 1} to {args.steps} "
-          f"(batch={args.batch_size}, seq_len={args.seq_len}, lr={args.lr})")
+    print(
+        f"training from step {start_step + 1} to {args.steps} "
+        f"(batch={args.batch_size}, seq_len={args.seq_len}, lr={args.lr})"
+    )
     print()
 
-    emit(metrics_f, event="start", step=start_step, total_steps=args.steps,
-         batch_size=args.batch_size, seq_len=args.seq_len, lr=args.lr,
-         resumed=args.resume is not None)
+    emit(
+        metrics_f,
+        event="start",
+        step=start_step,
+        total_steps=args.steps,
+        batch_size=args.batch_size,
+        seq_len=args.seq_len,
+        lr=args.lr,
+        resumed=args.resume is not None,
+    )
 
     # Set up SIGINT (Ctrl-C) handler. We don't exit immediately — we set a
     # flag and let the next iteration of the loop save cleanly and then exit.
     interrupted = {"flag": False}
+
     def sigint_handler(_signum, _frame):
         interrupted["flag"] = True
         print("\n[SIGINT] will save and exit at next step boundary...")
+
     signal.signal(signal.SIGINT, sigint_handler)
 
     # On resume, recover best_val/best_step from the existing metrics log so
@@ -451,7 +586,9 @@ def main() -> None:
             if interrupted["flag"]:
                 break
 
-            inputs, targets = get_batch(train_data, weights, args.batch_size, args.seq_len)
+            inputs, targets = get_batch(
+                train_data, weights, args.batch_size, args.seq_len
+            )
             logits = model(inputs)
             loss = F.cross_entropy(logits.view(-1, cfg.vocab_size), targets.view(-1))
 
@@ -467,14 +604,28 @@ def main() -> None:
                 tps = n_done * args.batch_size * args.seq_len / elapsed
                 steps_left = args.steps - step
                 eta = (elapsed / n_done) * steps_left
-                print(f"step {step:>5}/{args.steps}  train_loss={loss.item():.4f}  "
-                      f"({tps:>6.0f} tok/s)  ETA {fmt_eta(eta)}")
-                emit(metrics_f, event="step", step=step,
-                     train_loss=float(loss.item()), tok_per_sec=tps, eta_s=eta)
+                print(
+                    f"step {step:>5}/{args.steps}  train_loss={loss.item():.4f}  "
+                    f"({tps:>6.0f} tok/s)  ETA {fmt_eta(eta)}"
+                )
+                emit(
+                    metrics_f,
+                    event="step",
+                    step=step,
+                    train_loss=float(loss.item()),
+                    tok_per_sec=tps,
+                    eta_s=eta,
+                )
 
             if step % args.eval_every == 0:
-                val = eval_loss(model, val_data, weights, args.batch_size,
-                                args.seq_len, args.eval_batches)
+                val = eval_loss(
+                    model,
+                    val_data,
+                    weights,
+                    args.batch_size,
+                    args.seq_len,
+                    args.eval_batches,
+                )
                 is_best = val < best_val
                 if is_best:
                     best_val = val
@@ -487,11 +638,19 @@ def main() -> None:
                 emit(metrics_f, event="eval", step=step, val_loss=val, is_best=is_best)
 
             if step % args.sample_every == 0 and not args.no_sample:
-                text = sample_text(model, device, args.sample_prompt.encode(),
-                                   args.sample_tokens).rstrip()
-                print("---"); print(text); print("---")
-                emit(metrics_f, event="sample", step=step,
-                     prompt=args.sample_prompt, text=text)
+                text = sample_text(
+                    model, device, args.sample_prompt.encode(), args.sample_tokens
+                ).rstrip()
+                print("---")
+                print(text)
+                print("---")
+                emit(
+                    metrics_f,
+                    event="sample",
+                    step=step,
+                    prompt=args.sample_prompt,
+                    text=text,
+                )
 
             if step % args.save_every == 0:
                 ckpt = out_dir / f"step_{step}.pt"
@@ -502,8 +661,13 @@ def main() -> None:
                 if pruned:
                     msg += f"  pruned {len(pruned)}"
                 print(msg)
-                emit(metrics_f, event="save", step=step, path=ckpt.name,
-                     pruned=len(pruned))
+                emit(
+                    metrics_f,
+                    event="save",
+                    step=step,
+                    path=ckpt.name,
+                    pruned=len(pruned),
+                )
     finally:
         # Always: save an interrupted/final checkpoint so we never lose work.
         elapsed = time.perf_counter() - t_start
@@ -513,11 +677,12 @@ def main() -> None:
             update_symlink(out_dir, "latest.pt", ckpt)
             print(f"\ninterrupted at step {last_step_done} after {elapsed:.1f}s")
             print(f"  saved {ckpt.name}; resume with --resume {ckpt}")
-            emit(metrics_f, event="interrupted", step=last_step_done,
-                 elapsed_s=elapsed)
+            emit(metrics_f, event="interrupted", step=last_step_done, elapsed_s=elapsed)
         elif n_done > 0:
-            print(f"\ndone — {n_done} steps in {elapsed:.1f}s "
-                  f"({n_done / elapsed:.2f} steps/s)")
+            print(
+                f"\ndone — {n_done} steps in {elapsed:.1f}s "
+                f"({n_done / elapsed:.2f} steps/s)"
+            )
             # Avoid a duplicate save when the loop's final iteration already
             # saved this step (i.e. last_step_done % save_every == 0).
             final = out_dir / f"step_{last_step_done}.pt"
@@ -528,9 +693,14 @@ def main() -> None:
             print(f"final checkpoint: {final.name}")
             if best_step is not None:
                 print(f"best val_loss={best_val:.4f} at step {best_step} (best.pt)")
-            emit(metrics_f, event="end", step=last_step_done, elapsed_s=elapsed,
-                 best_val=best_val if best_step else None,
-                 best_step=best_step)
+            emit(
+                metrics_f,
+                event="end",
+                step=last_step_done,
+                elapsed_s=elapsed,
+                best_val=best_val if best_step else None,
+                best_step=best_step,
+            )
         metrics_f.close()
         # Restore stdout/stderr and close the log file.
         sys.stdout = sys.__stdout__

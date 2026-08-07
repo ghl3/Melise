@@ -31,7 +31,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch
 
-from transformer import TransformerLM, generate
+from transformer import build_model, generate
 
 
 def parse_args() -> argparse.Namespace:
@@ -88,10 +88,12 @@ def main() -> None:
     cfg = ckpt["config"]
     step = ckpt.get("step", "?")
 
-    model = TransformerLM(cfg).to(device)
+    # The config's type identifies the architecture (see transformer.models).
+    model = build_model(cfg).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
-    print(f"  step={step}  {model.num_parameters():,} params  dtype={cfg.dtype}  device={device}")
+    print(f"  {type(model).__name__}  step={step}  {model.num_parameters():,} params  "
+          f"dtype={cfg.dtype}  device={device}")
 
     # Interpret backslash escapes (\n, \t) in the user-provided prompt.
     prompt_str = args.prompt.encode().decode("unicode_escape")

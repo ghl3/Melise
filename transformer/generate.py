@@ -5,9 +5,7 @@ from __future__ import annotations
 from typing import Callable
 
 import torch
-
-from .cache import KVCache
-from .model import TransformerLM
+import torch.nn as nn
 
 
 def greedy_sample(logits: torch.Tensor) -> int:
@@ -17,7 +15,7 @@ def greedy_sample(logits: torch.Tensor) -> int:
 
 @torch.no_grad()
 def generate(
-    model: TransformerLM,
+    model: nn.Module,
     prompt_ids: torch.Tensor,
     max_new_tokens: int,
     *,
@@ -26,17 +24,20 @@ def generate(
     """Run prefill on `prompt_ids`, then decode up to `max_new_tokens` tokens.
 
     Args:
-        model: a TransformerLM. Should be in eval mode for stable behavior;
-            we don't toggle it here.
+        model: any model from transformer.models (they all expose
+            `new_cache` and `cfg.max_seq_len`). Should be in eval mode for
+            stable behavior; we don't toggle it here.
         prompt_ids: (B, S) int64 token IDs. B is typically 1.
         max_new_tokens: maximum tokens to generate (cap).
         sample_fn: maps a (vocab_size,) logits tensor to a token id.
             Default is greedy argmax. Pass your own for temperature/top-k/top-p.
 
     Returns: list of generated token ids (length ≤ max_new_tokens).
-    Stops early if the KV cache fills to `cfg.max_seq_len`.
+    Stops early if the cache fills to `cfg.max_seq_len`. (KDA layers have
+    no length limit — their state is O(1) — but GQA/MLA buffers and the
+    causal masks are sized to max_seq_len, so the cap applies to all.)
     """
-    cache = KVCache(model.cfg, prompt_ids.shape[0], prompt_ids.device)
+    cache = model.new_cache(prompt_ids.shape[0], prompt_ids.device)
 
     # Prefill: process the whole prompt in one forward pass.
     logits = model(prompt_ids, kv_cache=cache)
