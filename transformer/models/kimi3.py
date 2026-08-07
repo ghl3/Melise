@@ -86,6 +86,39 @@ class Kimi3Config:
         return 4 * self.n_blocks + 1
 
 
+def kimi3_small(**overrides) -> Kimi3Config:
+    """~17M params — the default Kimi3Config (d=256, 9 attention layers)."""
+    return Kimi3Config(**overrides)
+
+
+def kimi3_medium(**overrides) -> Kimi3Config:
+    """~67M params: d=384, 13 attention layers, 24 experts.
+
+    Scaled from small by the K3 shape rules: head_dim stays 32, the MoE
+    latent stays d/2, expert hidden stays ≈ latent, shared/dense hidden
+    stay 2d/4d."""
+    kwargs = dict(
+        d_model=384, n_blocks=3, n_heads=12,
+        kv_lora_rank=96, kda_decay_rank=24,
+        n_experts=24, top_k=4, moe_latent_dim=192, expert_hidden=192,
+        shared_expert_hidden=768, dense_hidden=1536,
+    )
+    kwargs.update(overrides)
+    return Kimi3Config(**kwargs)
+
+
+def kimi3_large(**overrides) -> Kimi3Config:
+    """~180M params: d=512, 17 attention layers, 32 experts."""
+    kwargs = dict(
+        d_model=512, n_blocks=4, n_heads=16,
+        kv_lora_rank=128, kda_decay_rank=32,
+        n_experts=32, top_k=4, moe_latent_dim=256, expert_hidden=256,
+        shared_expert_hidden=1024, dense_hidden=2048,
+    )
+    kwargs.update(overrides)
+    return Kimi3Config(**kwargs)
+
+
 class _Stage(nn.Module):
     """Pre-norm wrapper around one module. Under Attention Residuals each
     module is its own stage in the depth stream — there is no two-module

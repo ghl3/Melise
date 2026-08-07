@@ -17,14 +17,19 @@ a config instance — used to rebuild a model from a checkpoint.
 from ..config import Config
 from .base import TransformerLM
 from .deepseek import DeepSeekConfig, DeepSeekLM
-from .kimi3 import Kimi3Config, Kimi3LM
+from .kimi3 import Kimi3Config, Kimi3LM, kimi3_large, kimi3_medium, kimi3_small
 from .vanilla import VanillaConfig, VanillaLM
 
+# name → (config factory, model class). A factory is either the config class
+# itself or a function returning a config instance (size presets).
 MODELS = {
     "base": (Config, TransformerLM),
     "vanilla": (VanillaConfig, VanillaLM),
     "deepseek": (DeepSeekConfig, DeepSeekLM),
-    "kimi3": (Kimi3Config, Kimi3LM),
+    "kimi3": (Kimi3Config, Kimi3LM),          # alias for kimi3-small
+    "kimi3-small": (kimi3_small, Kimi3LM),
+    "kimi3-medium": (kimi3_medium, Kimi3LM),
+    "kimi3-large": (kimi3_large, Kimi3LM),
 }
 
 
