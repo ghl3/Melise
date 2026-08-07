@@ -1,272 +1,30 @@
-"""Download text corpora for training.
+"""Download training corpora from the project's GCS bucket.
 
-Available datasets:
-    shakespeare        TinyShakespeare (Karpathy's small dump)        ~1 MB
-    alice              Alice in Wonderland                           ~150 KB
-    frankenstein       Mary Shelley, Frankenstein                    ~440 KB
-    pride-prejudice    Jane Austen, Pride and Prejudice              ~700 KB
-    sherlock           Adventures of Sherlock Holmes                 ~600 KB
-    moby-dick          Herman Melville, Moby Dick                    ~1.2 MB
-    bible-kjv          King James Bible                              ~4.5 MB
-    shakespeare-all    Complete Works of Shakespeare (Gutenberg)     ~5.5 MB
-    webster            Webster's Unabridged Dictionary (1913)        ~29 MB
-    origin-species     Darwin, On the Origin of Species              ~950 KB
-    decline-fall-1     Gibbon, Decline and Fall, Volume 1            ~1.8 MB
-    wealth-of-nations  Adam Smith, The Wealth of Nations             ~2.4 MB
-    huckleberry-finn   Twain, Adventures of Huckleberry Finn         ~600 KB
-    tale-two-cities    Dickens, A Tale of Two Cities                 ~800 KB
-    treasure-island    Stevenson, Treasure Island                    ~400 KB
-    wizard-of-oz       Baum, The Wonderful Wizard of Oz              ~250 KB
-    walden             Thoreau, Walden                               ~600 KB
-    anna-karenina      Tolstoy (Garnett tr.), Anna Karenina          ~2.0 MB
-    david-copperfield  Dickens, David Copperfield                    ~1.9 MB
-    voyage-beagle      Darwin, Voyage of the Beagle                  ~1.0 MB
-    meditations        Marcus Aurelius (Long tr.), Meditations       ~300 KB
-    relativity         Einstein, Relativity (Special + General)      ~205 KB
-    treatise-light     Huygens, Treatise on Light                    ~207 KB
-    discourse-method   Descartes, Discourse on the Method            ~147 KB
-    descent-of-man     Darwin, The Descent of Man                    ~1.9 MB
-    war-and-peace      Tolstoy (Maude tr.), War and Peace            ~3.2 MB
-    monte-cristo       Dumas, The Count of Monte Cristo              ~2.7 MB
-    don-quixote        Cervantes (Ormsby tr.), Don Quixote           ~2.3 MB
-    les-miserables     Hugo (Hapgood tr.), Les Misérables            ~3.2 MB
-    middlemarch        George Eliot, Middlemarch                     ~1.8 MB
-    brothers-karamazov Dostoevsky (Garnett tr.), Brothers Karamazov  ~2.0 MB
-    grimms             Grimms' Fairy Tales                           ~530 KB
-    enwik8             Hutter Prize Wikipedia dump (byte benchmark)  100 MB
-    wikitext-103       WikiText-103 raw (curated Wikipedia prose)    ~510 MB
+The bucket (configs/gcs.json) is the canonical data store; every dataset
+in it is listed in its manifest.json with a sha256 that downloads are
+verified against. To add or update datasets in the bucket, use
+scripts/add_dataset.py (that's where origin URLs and processing live).
 
 Examples:
-    .venv/bin/python scripts/download_data.py
-    .venv/bin/python scripts/download_data.py --dataset alice
-    .venv/bin/python scripts/download_data.py --dataset alice --dataset frankenstein
-    .venv/bin/python scripts/download_data.py --all
+    .venv/bin/python scripts/download_data.py              # everything
+    .venv/bin/python scripts/download_data.py --dataset enwik8
     .venv/bin/python scripts/download_data.py --list
+    .venv/bin/python scripts/download_data.py --force      # re-download all
 
-Project Gutenberg files come with ~10–30 KB of legal/copyright preamble and
-trailer. We strip these automatically by looking for the standard markers,
-so the downloaded `.txt` is just the body of the book.
+Works anywhere `gcloud` is authenticated — including GCE VMs, whose
+default service account has read access to project buckets.
 """
 
 import argparse
-import subprocess
-import tempfile
-import zipfile
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+from gcs_util import PROJECT_ROOT, gs_uri, read_manifest, run, sha256_file
+
 DATA_DIR = PROJECT_ROOT / "data"
-
-
-# (url, output filename, kind) where kind is one of:
-#   "raw"           save the response body as-is
-#   "gutenberg"     strip the Project Gutenberg legal header/footer
-#   "zip:<member>"  download a zip and extract one member, byte-for-byte
-#                   (enwik8 is a byte-exact benchmark — never re-encode it)
-DATASETS: dict[str, tuple[str, str, str]] = {
-    "shakespeare": (
-        "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt",
-        "tinyshakespeare.txt",
-        "raw",
-    ),
-    "alice": (
-        "https://www.gutenberg.org/files/11/11-0.txt",
-        "alice.txt",
-        "gutenberg",
-    ),
-    "frankenstein": (
-        "https://www.gutenberg.org/files/84/84-0.txt",
-        "frankenstein.txt",
-        "gutenberg",
-    ),
-    "pride-prejudice": (
-        "https://www.gutenberg.org/files/1342/1342-0.txt",
-        "pride_prejudice.txt",
-        "gutenberg",
-    ),
-    "sherlock": (
-        "https://www.gutenberg.org/files/1661/1661-0.txt",
-        "sherlock.txt",
-        "gutenberg",
-    ),
-    "moby-dick": (
-        "https://www.gutenberg.org/files/2701/2701-0.txt",
-        "moby_dick.txt",
-        "gutenberg",
-    ),
-    "bible-kjv": (
-        "https://www.gutenberg.org/files/10/10-0.txt",
-        "bible_kjv.txt",
-        "gutenberg",
-    ),
-    "shakespeare-all": (
-        "https://www.gutenberg.org/files/100/100-0.txt",
-        "shakespeare_complete.txt",
-        "gutenberg",
-    ),
-    "webster": (
-        "https://www.gutenberg.org/cache/epub/29765/pg29765.txt",
-        "webster_dictionary.txt",
-        "gutenberg",
-    ),
-    "origin-species": (
-        "https://www.gutenberg.org/files/1228/1228-0.txt",
-        "origin_of_species.txt",
-        "gutenberg",
-    ),
-    "decline-fall-1": (
-        "https://www.gutenberg.org/files/731/731-0.txt",
-        "decline_and_fall_v1.txt",
-        "gutenberg",
-    ),
-    "wealth-of-nations": (
-        "https://www.gutenberg.org/files/3300/3300-0.txt",
-        "wealth_of_nations.txt",
-        "gutenberg",
-    ),
-    "huckleberry-finn": (
-        "https://www.gutenberg.org/files/76/76-0.txt",
-        "huckleberry_finn.txt",
-        "gutenberg",
-    ),
-    "tale-two-cities": (
-        "https://www.gutenberg.org/files/98/98-0.txt",
-        "tale_of_two_cities.txt",
-        "gutenberg",
-    ),
-    "treasure-island": (
-        "https://www.gutenberg.org/files/120/120-0.txt",
-        "treasure_island.txt",
-        "gutenberg",
-    ),
-    "wizard-of-oz": (
-        "https://www.gutenberg.org/files/55/55-0.txt",
-        "wizard_of_oz.txt",
-        "gutenberg",
-    ),
-    "walden": (
-        "https://www.gutenberg.org/files/205/205-0.txt",
-        "walden.txt",
-        "gutenberg",
-    ),
-    "anna-karenina": (
-        "https://www.gutenberg.org/files/1399/1399-0.txt",
-        "anna_karenina.txt",
-        "gutenberg",
-    ),
-    "david-copperfield": (
-        "https://www.gutenberg.org/files/766/766-0.txt",
-        "david_copperfield.txt",
-        "gutenberg",
-    ),
-    "voyage-beagle": (
-        "https://www.gutenberg.org/files/944/944-0.txt",
-        "voyage_of_the_beagle.txt",
-        "gutenberg",
-    ),
-    "meditations": (
-        "https://www.gutenberg.org/files/2680/2680-0.txt",
-        "meditations.txt",
-        "gutenberg",
-    ),
-    "relativity": (
-        "https://www.gutenberg.org/files/30155/30155-0.txt",
-        "relativity.txt",
-        "gutenberg",
-    ),
-    "treatise-light": (
-        "https://www.gutenberg.org/files/14725/14725-0.txt",
-        "treatise_on_light.txt",
-        "gutenberg",
-    ),
-    "discourse-method": (
-        "https://www.gutenberg.org/files/59/59-0.txt",
-        "discourse_on_method.txt",
-        "gutenberg",
-    ),
-    "descent-of-man": (
-        "https://www.gutenberg.org/files/2300/2300-0.txt",
-        "descent_of_man.txt",
-        "gutenberg",
-    ),
-    "war-and-peace": (
-        "https://www.gutenberg.org/files/2600/2600-0.txt",
-        "war_and_peace.txt",
-        "gutenberg",
-    ),
-    "monte-cristo": (
-        "https://www.gutenberg.org/files/1184/1184-0.txt",
-        "monte_cristo.txt",
-        "gutenberg",
-    ),
-    "don-quixote": (
-        "https://www.gutenberg.org/files/996/996-0.txt",
-        "don_quixote.txt",
-        "gutenberg",
-    ),
-    "les-miserables": (
-        "https://www.gutenberg.org/files/135/135-0.txt",
-        "les_miserables.txt",
-        "gutenberg",
-    ),
-    "middlemarch": (
-        "https://www.gutenberg.org/files/145/145-0.txt",
-        "middlemarch.txt",
-        "gutenberg",
-    ),
-    "brothers-karamazov": (
-        "https://www.gutenberg.org/files/28054/28054-0.txt",
-        "brothers_karamazov.txt",
-        "gutenberg",
-    ),
-    "grimms": (
-        "https://www.gutenberg.org/files/2591/2591-0.txt",
-        "grimms_fairy_tales.txt",
-        "gutenberg",
-    ),
-    "enwik8": (
-        "https://mattmahoney.net/dc/enwik8.zip",
-        "enwik8.txt",
-        "zip:enwik8",
-    ),
-    "wikitext-103": (
-        "https://wikitext.smerity.com/wikitext-103-raw-v1.zip",
-        "wikitext103_train.txt",
-        "zip:wikitext-103-raw/wiki.train.raw",
-    ),
-}
-
-
-GUTENBERG_START_MARKERS = [
-    "*** START OF THIS PROJECT GUTENBERG",
-    "*** START OF THE PROJECT GUTENBERG",
-]
-GUTENBERG_END_MARKERS = [
-    "*** END OF THIS PROJECT GUTENBERG",
-    "*** END OF THE PROJECT GUTENBERG",
-]
-
-
-def strip_gutenberg(text: str) -> str:
-    """Trim PG header (legal/copyright) and footer (license) if present."""
-    for sm in GUTENBERG_START_MARKERS:
-        idx = text.find(sm)
-        if idx != -1:
-            nl = text.find("\n", idx)
-            if nl != -1:
-                text = text[nl + 1 :]
-            break
-    for em in GUTENBERG_END_MARKERS:
-        idx = text.find(em)
-        if idx != -1:
-            text = text[:idx]
-            break
-    return text.strip() + "\n"
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Download text training datasets.",
+        description="Download training datasets from the project GCS bucket.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -274,92 +32,60 @@ def parse_args() -> argparse.Namespace:
         "--dataset",
         action="append",
         default=[],
-        help="Dataset name (repeat for multiple). Default: shakespeare.",
+        help="Dataset name (repeat for multiple). Default: all registered datasets.",
     )
-    p.add_argument("--all", action="store_true", help="Download every known dataset.")
-    p.add_argument("--list", action="store_true", help="List available datasets and exit.")
+    p.add_argument("--list", action="store_true", help="List registered datasets and exit.")
     p.add_argument("--force", action="store_true", help="Re-download even if file exists.")
     return p.parse_args()
 
 
-def download_one(name: str, force: bool) -> Path:
-    if name not in DATASETS:
-        raise SystemExit(f"unknown dataset: {name!r}. Run with --list to see options.")
-    url, filename, kind = DATASETS[name]
-    path = DATA_DIR / filename
+def download_one(name: str, entry: dict, force: bool) -> None:
+    path = DATA_DIR / entry["filename"]
 
     if path.exists() and not force:
-        kb = path.stat().st_size / 1024
-        print(f"  {name:<18}  cached  ({kb:>6.0f} KB)  {path.relative_to(PROJECT_ROOT)}")
-        return path
+        if path.stat().st_size == entry["bytes"]:
+            print(f"  {name:<20} cached  ({entry['bytes'] / 1024:>9,.0f} KB)")
+            return
+        print(f"  {name:<20} size mismatch — re-downloading")
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"  {name:<18}  downloading...", flush=True)
+    print(f"  {name:<20} downloading ({entry['bytes'] / 1024:>9,.0f} KB) ...", flush=True)
+    run(["gcloud", "storage", "cp", gs_uri(entry["filename"]), str(path)],
+        capture_output=True)
 
-    with tempfile.NamedTemporaryFile(suffix=".tmp", dir=DATA_DIR, delete=False) as tmp:
-        tmp_path = Path(tmp.name)
-
-    try:
-        subprocess.run(["curl", "-fsSL", "-o", str(tmp_path), url], check=True)
-
-        if kind == "gutenberg":
-            text = tmp_path.read_text(encoding="utf-8", errors="replace")
-            text = strip_gutenberg(text)
-            path.write_text(text, encoding="utf-8")
-        elif kind == "raw":
-            tmp_path.replace(path)
-        elif kind.startswith("zip:"):
-            member = kind.split(":", 1)[1]
-            with zipfile.ZipFile(tmp_path) as zf:
-                path.write_bytes(zf.read(member))
-        else:
-            raise ValueError(f"unknown kind: {kind!r}")
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-    kb = path.stat().st_size / 1024
-    print(f"  {name:<18}  saved   ({kb:>6.0f} KB)  {path.relative_to(PROJECT_ROOT)}")
-    return path
-
-
-def sweep_stale_tmp_files() -> int:
-    """Remove *.tmp files left behind by previous interrupted downloads.
-
-    Our tempfile cleanup lives in a `finally` block, which handles normal
-    exits and exceptions but not SIGKILL. Sweeping at startup keeps the
-    data dir tidy across kills."""
-    if not DATA_DIR.exists():
-        return 0
-    n = 0
-    for p in DATA_DIR.glob("*.tmp"):
-        p.unlink(missing_ok=True)
-        n += 1
-    return n
+    digest = sha256_file(path)
+    if digest != entry["sha256"]:
+        path.unlink(missing_ok=True)
+        raise SystemExit(
+            f"{name}: sha256 mismatch after download (got {digest[:12]}…, "
+            f"manifest says {entry['sha256'][:12]}…)"
+        )
+    print(f"  {name:<20} saved + verified -> data/{entry['filename']}")
 
 
 def main() -> None:
     args = parse_args()
+    manifest = read_manifest()
+    entries = manifest["datasets"]
+    if not entries:
+        raise SystemExit(
+            "bucket manifest is empty — seed it with scripts/add_dataset.py --seed-from-local"
+        )
 
     if args.list:
-        print("Available datasets:")
-        for name, (_, filename, _) in DATASETS.items():
-            print(f"  {name:<18}  -> data/{filename}")
+        print(f"{len(entries)} dataset(s) in {gs_uri('')}:")
+        for name, e in sorted(entries.items()):
+            print(f"  {name:<20} {e['bytes']:>12,} B  {e['filename']}")
         return
 
-    if args.all:
-        names = list(DATASETS)
-    elif args.dataset:
-        names = args.dataset
-    else:
-        names = ["shakespeare"]
-
-    n_stale = sweep_stale_tmp_files()
-    if n_stale:
-        print(f"swept {n_stale} stale .tmp file(s)")
+    names = args.dataset or sorted(entries)
+    unknown = [n for n in names if n not in entries]
+    if unknown:
+        raise SystemExit(f"not in bucket manifest: {unknown}. See --list.")
 
     print(f"target: {len(names)} dataset(s) -> {DATA_DIR.relative_to(PROJECT_ROOT)}/")
     for name in names:
-        download_one(name, args.force)
+        download_one(name, entries[name], args.force)
 
 
 if __name__ == "__main__":
