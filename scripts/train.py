@@ -139,18 +139,27 @@ _NOUNS = [
 ]
 
 
-def generate_run_name() -> str:
-    """Return e.g. 'calm-river-20260503-141522'.
+def fmt_params(n: int) -> str:
+    """17,234,567 → '17M'; 1,234,567,890 → '1.2B'."""
+    if n >= 1e9:
+        return f"{n / 1e9:.1f}B"
+    return f"{round(n / 1e6)}M"
 
-    Uses a separate time-seeded RNG so the chosen name is independent of
-    --seed (otherwise two default-seed runs started in the same second
-    would collide).
+
+def generate_run_name(preset: str, n_params: int) -> str:
+    """Return e.g. 'kimi3-medium-66M-calm-river-20260503-141522'.
+
+    The name leads with the architecture preset and parameter count so
+    checkpoint directories (and TensorBoard run labels) identify the
+    model at a glance. Uses a separate time-seeded RNG so the chosen name
+    is independent of --seed (otherwise two default-seed runs started in
+    the same second would collide).
     """
     rng = random.Random()  # seeded from os.urandom
     adj = rng.choice(_ADJECTIVES)
     noun = rng.choice(_NOUNS)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{adj}-{noun}-{ts}"
+    return f"{preset}-{fmt_params(n_params)}-{adj}-{noun}-{ts}"
 
 
 # ---------- Tee writer (stdout -> console + file) ----------
@@ -326,13 +335,13 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def resolve_run_dir(args: argparse.Namespace) -> Path:
+def resolve_run_dir(args: argparse.Namespace, preset: str, n_params: int) -> Path:
     """Pick the output directory based on --out / --resume / --run-name."""
     if args.out is not None:
         return args.out
     if args.resume is not None:
         return args.resume.parent.resolve()
-    name = args.run_name or generate_run_name()
+    name = args.run_name or generate_run_name(preset, n_params)
     return (PROJECT_ROOT / "checkpoints" / name).resolve()
 
 
@@ -717,31 +726,23 @@ def main() -> None:
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
 
-    out_dir = resolve_run_dir(args)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    args.out = out_dir
-
-    # Mirror stdout to a per-run train.log. Closed in the finally block.
-    log_file = open(out_dir / "train.log", "a", buffering=1)
-    sys.stdout = Tee(sys.__stdout__, log_file)
-    sys.stderr = Tee(sys.__stderr__, log_file)
-
-    metrics_path = out_dir / "metrics.jsonl"
-    metrics_f = open_metrics_log(metrics_path)
-
-    # Build the model. On a fresh run the preset decides the architecture;
-    # on resume the checkpoint's embedded config is authoritative, so a
-    # wrong --preset/--seq-len flag can't silently build a mismatched model.
+    # Build the model BEFORE resolving the run dir — auto-generated run
+    # names lead with the preset and parameter count. On a fresh run the
+    # preset decides the architecture; on resume the checkpoint's embedded
+    # config is authoritative, so a wrong --preset/--seq-len flag can't
+    # silently build a mismatched model. Notes are printed once the
+    # train.log tee is open so they're captured in the log.
+    notes = []
     ckpt = None
     if args.resume is not None:
-        print(f"resuming from {args.resume}")
+        notes.append(f"resuming from {args.resume}")
         ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
         cfg = ckpt["config"]
         preset = ckpt.get("preset", args.preset)
         if preset != args.preset and "preset" in ckpt:
-            print(f"  note: checkpoint was trained with --preset {preset}; using that")
+            notes.append(f"  note: checkpoint was trained with --preset {preset}; using that")
         if cfg.max_seq_len != args.seq_len:
-            print(
+            notes.append(
                 f"  note: checkpoint config has max_seq_len={cfg.max_seq_len}; "
                 f"overriding --seq-len {args.seq_len}"
             )
@@ -753,6 +754,20 @@ def main() -> None:
         cfg = config_cls(dtype=torch.float32, max_seq_len=args.seq_len)
         model = model_cls(cfg).to(device)
 
+    out_dir = resolve_run_dir(args, preset, model.num_parameters())
+    out_dir.mkdir(parents=True, exist_ok=True)
+    args.out = out_dir
+
+    # Mirror stdout to a per-run train.log. Closed in the finally block.
+    log_file = open(out_dir / "train.log", "a", buffering=1)
+    sys.stdout = Tee(sys.__stdout__, log_file)
+    sys.stderr = Tee(sys.__stderr__, log_file)
+
+    metrics_path = out_dir / "metrics.jsonl"
+    metrics_f = open_metrics_log(metrics_path)
+
+    for note in notes:
+        print(note)
     print(
         f"run dir: {out_dir.relative_to(PROJECT_ROOT) if out_dir.is_relative_to(PROJECT_ROOT) else out_dir}"
     )
