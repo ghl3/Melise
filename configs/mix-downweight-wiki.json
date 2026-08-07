@@ -1,0 +1,8 @@
+{
+  "include": "data/*.txt",
+  "multipliers": {
+    "data/wikitext103_train.txt": 0.1,
+    "data/enwik8.txt": 0.1,
+    "data/webster_dictionary.txt": 0.1
+  }
+}

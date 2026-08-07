@@ -308,6 +308,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Comma-separated sampling weights. Default: weight by byte size.",
     )
+    g.add_argument(
+        "--data-mix",
+        type=Path,
+        default=None,
+        help="JSON mixture config: {\"include\": <glob or list of globs>, "
+        "\"multipliers\": {<path or filename>: <mult>, ...}}. Sampling weight "
+        "is byte_size × multiplier (default multiplier 1.0, i.e. naive "
+        "byte-size weighting). Mutually exclusive with --data/--data-weights.",
+    )
     g.add_argument("--val-frac", type=float, default=0.05)
 
     g = p.add_argument_group("misc")
@@ -376,6 +385,9 @@ def restore_rng_state(state: dict | None, device: torch.device) -> bool:
 
 
 def load_data(paths, device, val_frac):
+    """Load each corpus as a uint8 tensor (1 byte per token). Batches are
+    cast to int64 on the fly in get_batch — storing the corpora themselves
+    as int64 would be 8× the memory (WikiText-103 alone would be ~4.3 GB)."""
     train_list, val_list, byte_counts = [], [], []
     for path in paths:
         if not path.exists():
@@ -383,7 +395,7 @@ def load_data(paths, device, val_frac):
                 f"{path} not found. Run scripts/download_data.py first."
             )
         raw = path.read_bytes()
-        data = torch.tensor(list(raw), dtype=torch.long, device=device)
+        data = torch.frombuffer(bytearray(raw), dtype=torch.uint8).to(device)
         n_val = max(int(len(data) * val_frac), 1)
         train_list.append(data[:-n_val])
         val_list.append(data[-n_val:])
@@ -399,7 +411,7 @@ def get_batch(datasets, weights, batch_size, seq_len):
         )
         inputs = torch.stack([d[s : s + seq_len] for s in starts])
         targets = torch.stack([d[s + 1 : s + 1 + seq_len] for s in starts])
-        return inputs, targets
+        return inputs.long(), targets.long()
 
     chosen = torch.multinomial(weights, batch_size, replacement=True).tolist()
     inputs, targets = [], []
@@ -408,7 +420,7 @@ def get_batch(datasets, weights, batch_size, seq_len):
         s = int(torch.randint(0, d.shape[0] - seq_len - 1, (1,)).item())
         inputs.append(d[s : s + seq_len])
         targets.append(d[s + 1 : s + 1 + seq_len])
-    return torch.stack(inputs), torch.stack(targets)
+    return torch.stack(inputs).long(), torch.stack(targets).long()
 
 
 def parse_weights(weights_str, byte_counts):
@@ -420,6 +432,44 @@ def parse_weights(weights_str, byte_counts):
             f"--data-weights has {len(weights)} entries; --data has {len(byte_counts)}."
         )
     return torch.tensor(weights)
+
+
+def load_data_mix(mix_path):
+    """Read a mixture config: which files to train on and a per-file
+    sampling-weight multiplier on top of naive byte-size weighting.
+
+        {"include": "data/*.txt",                       # glob or list of globs
+         "multipliers": {"data/enwik8.txt": 0.1}}       # default 1.0
+
+    Returns (paths, multipliers) with multipliers aligned to paths.
+    Multiplier keys may be project-relative paths or bare filenames.
+    """
+    mix = json.loads(mix_path.read_text())
+    includes = mix.get("include", "data/*.txt")
+    if isinstance(includes, str):
+        includes = [includes]
+    paths = sorted({p for g in includes for p in PROJECT_ROOT.glob(g)})
+    if not paths:
+        raise SystemExit(f"--data-mix: include patterns {includes} matched no files")
+
+    raw_mults = dict(mix.get("multipliers", {}))
+    matched = set()
+    mults = []
+    for p in paths:
+        rel = str(p.relative_to(PROJECT_ROOT))
+        for key in (rel, p.name):
+            if key in raw_mults:
+                mults.append(float(raw_mults[key]))
+                matched.add(key)
+                break
+        else:
+            mults.append(1.0)
+    unmatched = set(raw_mults) - matched
+    if unmatched:
+        raise SystemExit(
+            f"--data-mix: multiplier keys match no included file: {sorted(unmatched)}"
+        )
+    return paths, mults
 
 
 # ---------- MoE routing monitor ----------
@@ -744,11 +794,20 @@ def main() -> None:
         print(f"nothing to do — start_step ({start_step}) >= --steps ({args.steps}).")
         return
 
+    mix_mults = None
+    if args.data_mix is not None:
+        if args.data or args.data_weights:
+            raise SystemExit("--data-mix is mutually exclusive with --data/--data-weights")
+        args.data, mix_mults = load_data_mix(args.data_mix)
+        print(f"data mix: {args.data_mix} ({len(args.data)} files)")
     if not args.data:
         args.data = [PROJECT_ROOT / "data" / "tinyshakespeare.txt"]
 
     train_data, val_data, byte_counts = load_data(args.data, device, args.val_frac)
-    weights = parse_weights(args.data_weights, byte_counts)
+    if mix_mults is not None:
+        weights = torch.tensor([b * m for b, m in zip(byte_counts, mix_mults)])
+    else:
+        weights = parse_weights(args.data_weights, byte_counts)
     norm_weights = weights / weights.sum()
 
     print(f"datasets ({len(args.data)}):")

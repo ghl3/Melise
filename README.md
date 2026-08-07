@@ -64,6 +64,10 @@ Models (see `transformer/models/`, one self-documenting file each):
 # Sample from the latest checkpoint (architecture is recovered from the checkpoint)
 .venv/bin/python scripts/sample.py --checkpoint checkpoints/<run>/latest.pt --temperature 0.8
 
+# Train on the whole data/ directory with a mixture config (sampling weight =
+# byte size × per-file multiplier; see configs/mix-downweight-wiki.json)
+.venv/bin/python scripts/train.py --data-mix configs/mix-downweight-wiki.json --steps 5000
+
 # Watch a run live (loss/bpb, LR, grad norm, val, per-layer MoE expert load, samples)
 .venv/bin/tensorboard --logdir checkpoints/<run>/tb
 ```
