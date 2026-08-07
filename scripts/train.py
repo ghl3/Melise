@@ -675,12 +675,13 @@ def recover_best_from_metrics(metrics_path):
 # ---------- Metrics + run manifest ----------
 
 
-def write_run_manifest(path, args, cfg, preset, byte_counts, weights):
+def write_run_manifest(path, args, cfg, preset, n_params, byte_counts, weights):
     """One-shot snapshot of the run setup. Written at start; never updated."""
     manifest = {
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "run_name": path.parent.name,
         "preset": preset,
+        "n_params": n_params,
         "args": {
             k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()
         },
@@ -822,7 +823,10 @@ def main() -> None:
     # Run manifest (only on first start; preserves original on resume).
     manifest_path = out_dir / "run.json"
     if not manifest_path.exists():
-        write_run_manifest(manifest_path, args, cfg, preset, byte_counts, norm_weights)
+        write_run_manifest(
+            manifest_path, args, cfg, preset, model.num_parameters(),
+            byte_counts, norm_weights,
+        )
 
     # TensorBoard writer. Resumed runs append to the same tb/ dir; steps
     # continue from where they left off, so curves join up seamlessly.
@@ -855,6 +859,7 @@ def main() -> None:
         event="start",
         step=start_step,
         preset=preset,
+        n_params=model.num_parameters(),
         total_steps=args.steps,
         batch_size=args.batch_size,
         seq_len=args.seq_len,
@@ -980,6 +985,7 @@ def main() -> None:
                     step=step,
                     val_loss=val,
                     val_bpb=val / LN2,
+                    tokens_seen=tokens_seen,
                     param_norm=pnorm,
                     is_best=is_best,
                 )
