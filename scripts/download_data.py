@@ -26,6 +26,15 @@ Available datasets:
     treatise-light     Huygens, Treatise on Light                    ~207 KB
     discourse-method   Descartes, Discourse on the Method            ~147 KB
     descent-of-man     Darwin, The Descent of Man                    ~1.9 MB
+    war-and-peace      Tolstoy (Maude tr.), War and Peace            ~3.2 MB
+    monte-cristo       Dumas, The Count of Monte Cristo              ~2.7 MB
+    don-quixote        Cervantes (Ormsby tr.), Don Quixote           ~2.3 MB
+    les-miserables     Hugo (Hapgood tr.), Les Misérables            ~3.2 MB
+    middlemarch        George Eliot, Middlemarch                     ~1.8 MB
+    brothers-karamazov Dostoevsky (Garnett tr.), Brothers Karamazov  ~2.0 MB
+    grimms             Grimms' Fairy Tales                           ~530 KB
+    enwik8             Hutter Prize Wikipedia dump (byte benchmark)  100 MB
+    wikitext-103       WikiText-103 raw (curated Wikipedia prose)    ~510 MB
 
 Examples:
     .venv/bin/python scripts/download_data.py
@@ -42,13 +51,18 @@ so the downloaded `.txt` is just the body of the book.
 import argparse
 import subprocess
 import tempfile
+import zipfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 
 
-# (url, output filename, kind) where kind ∈ {"raw", "gutenberg"}
+# (url, output filename, kind) where kind is one of:
+#   "raw"           save the response body as-is
+#   "gutenberg"     strip the Project Gutenberg legal header/footer
+#   "zip:<member>"  download a zip and extract one member, byte-for-byte
+#                   (enwik8 is a byte-exact benchmark — never re-encode it)
 DATASETS: dict[str, tuple[str, str, str]] = {
     "shakespeare": (
         "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt",
@@ -175,6 +189,51 @@ DATASETS: dict[str, tuple[str, str, str]] = {
         "descent_of_man.txt",
         "gutenberg",
     ),
+    "war-and-peace": (
+        "https://www.gutenberg.org/files/2600/2600-0.txt",
+        "war_and_peace.txt",
+        "gutenberg",
+    ),
+    "monte-cristo": (
+        "https://www.gutenberg.org/files/1184/1184-0.txt",
+        "monte_cristo.txt",
+        "gutenberg",
+    ),
+    "don-quixote": (
+        "https://www.gutenberg.org/files/996/996-0.txt",
+        "don_quixote.txt",
+        "gutenberg",
+    ),
+    "les-miserables": (
+        "https://www.gutenberg.org/files/135/135-0.txt",
+        "les_miserables.txt",
+        "gutenberg",
+    ),
+    "middlemarch": (
+        "https://www.gutenberg.org/files/145/145-0.txt",
+        "middlemarch.txt",
+        "gutenberg",
+    ),
+    "brothers-karamazov": (
+        "https://www.gutenberg.org/files/28054/28054-0.txt",
+        "brothers_karamazov.txt",
+        "gutenberg",
+    ),
+    "grimms": (
+        "https://www.gutenberg.org/files/2591/2591-0.txt",
+        "grimms_fairy_tales.txt",
+        "gutenberg",
+    ),
+    "enwik8": (
+        "https://mattmahoney.net/dc/enwik8.zip",
+        "enwik8.txt",
+        "zip:enwik8",
+    ),
+    "wikitext-103": (
+        "https://wikitext.smerity.com/wikitext-103-raw-v1.zip",
+        "wikitext103_train.txt",
+        "zip:wikitext-103-raw/wiki.train.raw",
+    ),
 }
 
 
@@ -249,6 +308,10 @@ def download_one(name: str, force: bool) -> Path:
             path.write_text(text, encoding="utf-8")
         elif kind == "raw":
             tmp_path.replace(path)
+        elif kind.startswith("zip:"):
+            member = kind.split(":", 1)[1]
+            with zipfile.ZipFile(tmp_path) as zf:
+                path.write_bytes(zf.read(member))
         else:
             raise ValueError(f"unknown kind: {kind!r}")
     finally:
