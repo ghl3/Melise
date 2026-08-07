@@ -1,4 +1,4 @@
-"""Train a TransformerLM on a byte-level text corpus.
+"""Train a model preset on a byte-level text corpus.
 
 Examples:
 
@@ -12,12 +12,13 @@ Examples:
     Custom run name:
         .venv/bin/python scripts/train.py --run-name my-experiment --steps 5000
 
-    Resume training (uses the same directory):
+    Resume training (uses the same directory; model, optimizer, RNG
+    streams, and best-val tracking all continue where they left off):
         .venv/bin/python scripts/train.py \\
             --resume checkpoints/calm-river-20260503-141522/latest.pt --steps 10000
 
-    Skip in-training samples for cleaner logs:
-        .venv/bin/python scripts/train.py --steps 1000 --no-sample
+    Watch a run in TensorBoard:
+        .venv/bin/tensorboard --logdir checkpoints/<run>/tb
 
 Each run writes to its own subdirectory under checkpoints/ containing:
 
@@ -28,14 +29,33 @@ Each run writes to its own subdirectory under checkpoints/ containing:
     run.json        manifest: args, config, datasets, start time
     metrics.jsonl   append-only event log (steps / evals / saves / samples)
     train.log       full stdout, mirrored from console
+    tb/             TensorBoard event files
 
-The same `transformer.TransformerLM` is used for training and inference.
+What gets tracked (metrics.jsonl and TensorBoard):
+
+    train/loss, train/bpb   cross-entropy in nats and bits-per-byte
+    train/lr                the scheduled learning rate
+    train/grad_norm         pre-clip global gradient norm
+    train/tok_per_sec, train/tokens_seen, train/mem_gb
+    val/loss, val/bpb, val/best
+    params/global_norm      global L2 norm of all weights (on evals)
+    moe/L*_max_load         per-MoE-layer max expert load fraction
+    moe/L*_entropy          per-MoE-layer normalized routing entropy
+    moe/L*_bias_span        balancing-bias spread (DeepSeek/Kimi routers)
+
+Checkpoints embed the model config, optimizer state, RNG streams (CPU +
+device), best-val tracking, and cumulative token count, so a resumed run
+is bit-for-bit the run that would have happened without the interruption.
+Checkpoint writes are atomic (tmp file + rename), so Ctrl-C can never
+leave a truncated checkpoint behind.
+
 Training runs in fp32 for stability; trained weights can be cast to bf16
 at inference time. Run from the project root.
 """
 
 import argparse
 import json
+import math
 import random
 import signal
 import sys
@@ -51,7 +71,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import torch
 import torch.nn.functional as F
 
-from transformer import MODELS, generate
+from transformer import MODELS, build_model, generate
+from transformer.ffn import DeepSeekMoE, MoE, StableLatentMoE
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:  # tensorboard not installed — script still works
+    SummaryWriter = None
+
+LN2 = math.log(2.0)
 
 # ---------- Auto-naming ----------
 
@@ -174,7 +202,8 @@ def parse_args() -> argparse.Namespace:
         default="base",
         choices=sorted(MODELS),
         help="Architecture to train: base (GQA + MoE), vanilla (MHA + dense), "
-        "deepseek (MLA + DeepSeekMoE), kimi3 (KDA/MLA hybrid + AttnRes + LatentMoE)",
+        "deepseek (MLA + DeepSeekMoE), kimi3 (KDA/MLA hybrid + AttnRes + LatentMoE). "
+        "Ignored when resuming — the checkpoint's config wins",
     )
 
     g = p.add_argument_group("training")
@@ -186,13 +215,35 @@ def parse_args() -> argparse.Namespace:
     )
     g.add_argument("--batch-size", type=int, default=16)
     g.add_argument("--seq-len", type=int, default=512, help="Sequence length per batch")
-    g.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    g.add_argument("--lr", type=float, default=3e-4, help="Peak learning rate")
+    g.add_argument(
+        "--lr-schedule",
+        type=str,
+        default="cosine",
+        choices=("cosine", "constant"),
+        help="cosine: linear warmup then cosine decay to --min-lr-frac * lr "
+        "(schedule is a pure function of step, so it resumes exactly; "
+        "note it is shaped by --steps, so extending --steps on resume "
+        "reshapes the tail)",
+    )
+    g.add_argument(
+        "--warmup-frac",
+        type=float,
+        default=0.01,
+        help="Fraction of --steps spent in linear warmup (cosine schedule)",
+    )
+    g.add_argument(
+        "--min-lr-frac",
+        type=float,
+        default=0.1,
+        help="Final LR as a fraction of --lr (cosine schedule)",
+    )
     g.add_argument("--weight-decay", type=float, default=0.1)
     g.add_argument("--grad-clip", type=float, default=1.0, help="Max gradient norm")
 
     g = p.add_argument_group("logging & evaluation")
     g.add_argument(
-        "--log-every", type=int, default=25, help="Log train loss every N steps"
+        "--log-every", type=int, default=25, help="Log train metrics every N steps"
     )
     g.add_argument(
         "--eval-every", type=int, default=100, help="Run val eval every N steps"
@@ -209,6 +260,11 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--sample-tokens", type=int, default=200)
     g.add_argument("--sample-prompt", type=str, default="ROMEO:\n")
     g.add_argument("--no-sample", action="store_true")
+    g.add_argument(
+        "--no-tensorboard",
+        action="store_true",
+        help="Disable TensorBoard event files (tb/ subdir)",
+    )
 
     g = p.add_argument_group("checkpointing")
     g.add_argument("--save-every", type=int, default=100)
@@ -229,7 +285,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Path to a checkpoint to resume from (uses its parent dir as --out). "
-        "Must have been trained with the same --preset",
+        "The model is rebuilt from the checkpoint's own config",
     )
     g.add_argument(
         "--keep-last",
@@ -269,6 +325,51 @@ def resolve_run_dir(args: argparse.Namespace) -> Path:
         return args.resume.parent.resolve()
     name = args.run_name or generate_run_name()
     return (PROJECT_ROOT / "checkpoints" / name).resolve()
+
+
+# ---------- LR schedule ----------
+
+
+def lr_at(step: int, args: argparse.Namespace) -> float:
+    """Learning rate for a (1-indexed) step. Pure function of step, so a
+    resumed run lands on exactly the same schedule."""
+    if args.lr_schedule == "constant":
+        return args.lr
+    warmup = max(int(args.warmup_frac * args.steps), 1)
+    min_lr = args.min_lr_frac * args.lr
+    if step <= warmup:
+        return args.lr * step / warmup
+    t = min((step - warmup) / max(args.steps - warmup, 1), 1.0)
+    return min_lr + 0.5 * (args.lr - min_lr) * (1.0 + math.cos(math.pi * t))
+
+
+# ---------- RNG state (for exact resume) ----------
+
+
+def rng_state(device: torch.device) -> dict:
+    """Snapshot every RNG stream training draws from: CPU (mixture-dataset
+    multinomial) and the device generator (batch start offsets on MPS/CUDA)."""
+    state = {"cpu": torch.get_rng_state()}
+    if device.type == "mps":
+        state["mps"] = torch.mps.get_rng_state()
+    elif device.type == "cuda":
+        state["cuda"] = torch.cuda.get_rng_state(device)
+    return state
+
+
+def restore_rng_state(state: dict | None, device: torch.device) -> bool:
+    if not state:
+        return False
+    try:
+        torch.set_rng_state(state["cpu"])
+        if device.type == "mps" and "mps" in state:
+            torch.mps.set_rng_state(state["mps"])
+        elif device.type == "cuda" and "cuda" in state:
+            torch.cuda.set_rng_state(state["cuda"], device)
+        return True
+    except Exception as e:  # torch-version mismatch etc. — not fatal
+        print(f"  (could not restore RNG state: {e}; batch stream restarts from --seed)")
+        return False
 
 
 # ---------- Data ----------
@@ -321,6 +422,75 @@ def parse_weights(weights_str, byte_counts):
     return torch.tensor(weights)
 
 
+# ---------- MoE routing monitor ----------
+
+
+class MoEMonitor:
+    """Watch expert load balance without touching the model code.
+
+    Registers a forward-pre-hook on every MoE layer. The hooks are inert
+    except on logging steps, when each one re-runs the layer's (tiny)
+    router on the incoming activations and records per-expert load
+    fractions. Cheap — one d×E matmul per MoE layer per logged step.
+
+    Reported per layer:
+        max_load  — worst expert's share of routings (1/E is perfectly
+                    balanced; ~1.0 means router collapse)
+        entropy   — routing entropy normalized to [0, 1] (1 = uniform)
+        bias_span — max−min of the balancing bias, for routers that have
+                    one (DeepSeekMoE sign-update, StableLatentMoE QB)
+    """
+
+    def __init__(self, model: torch.nn.Module):
+        self.enabled = False
+        self.loads: dict[str, torch.Tensor] = {}
+        self.bias_spans: dict[str, float] = {}
+        self.names: list[str] = []
+        for path, mod in model.named_modules():
+            if isinstance(mod, (MoE, DeepSeekMoE, StableLatentMoE)):
+                name = f"L{len(self.names)}"
+                self.names.append(name)
+                mod.register_forward_pre_hook(self._make_hook(name))
+
+    def _make_hook(self, name: str):
+        def hook(module, inputs):
+            if not self.enabled:
+                return
+            with torch.no_grad():
+                x = inputs[0].reshape(-1, inputs[0].shape[-1])
+                if isinstance(module, MoE):
+                    scores = module.router(x).float()
+                    idx = scores.topk(module.top_k, dim=-1).indices
+                else:  # sigmoid routers select through their balancing bias
+                    scores = torch.sigmoid(module.router(x).float())
+                    idx = (scores + module.route_bias).topk(module.top_k, dim=-1).indices
+                n_experts = module.router.out_features
+                counts = torch.bincount(idx.reshape(-1), minlength=n_experts).float()
+                self.loads[name] = (counts / counts.sum()).cpu()
+                if hasattr(module, "route_bias"):
+                    b = module.route_bias
+                    self.bias_spans[name] = float((b.max() - b.min()).item())
+
+        return hook
+
+    def summary(self) -> dict:
+        """Aggregates for metrics.jsonl (per-layer detail goes to TensorBoard)."""
+        if not self.loads:
+            return {}
+        max_loads = [float(l.max()) for l in self.loads.values()]
+        entropies = [self.entropy(l) for l in self.loads.values()]
+        return {
+            "moe_max_load": max(max_loads),
+            "moe_mean_entropy": sum(entropies) / len(entropies),
+        }
+
+    @staticmethod
+    def entropy(load: torch.Tensor) -> float:
+        p = load[load > 0]
+        h = -(p * p.log()).sum().item()
+        return h / math.log(len(load)) if len(load) > 1 else 1.0
+
+
 # ---------- Eval & sampling ----------
 
 
@@ -358,27 +528,46 @@ def sample_text(model, device, prompt, n_tokens):
             model.train()
 
 
+@torch.no_grad()
+def global_param_norm(model) -> float:
+    total = 0.0
+    for p in model.parameters():
+        total += float(p.detach().float().pow(2).sum().item())
+    return math.sqrt(total)
+
+
+def device_mem_gb(device: torch.device) -> float | None:
+    if device.type == "mps":
+        return torch.mps.current_allocated_memory() / 1e9
+    if device.type == "cuda":
+        return torch.cuda.memory_allocated(device) / 1e9
+    return None
+
+
 # ---------- Checkpointing ----------
 
 
-def save_checkpoint(path, model, optimizer, step, cfg):
+def save_checkpoint(path, model, optimizer, step, cfg, *, preset, best_val,
+                    best_step, tokens_seen, device):
+    """Atomic write: serialize to a tmp file in the same directory, then
+    rename over the target. A Ctrl-C mid-save can never leave a truncated
+    checkpoint at `path`."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "step": step,
-            "config": cfg,
-        },
-        path,
-    )
-
-
-def load_checkpoint(path, model, optimizer):
-    ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    model.load_state_dict(ckpt["model"])
-    optimizer.load_state_dict(ckpt["optimizer"])
-    return int(ckpt["step"])
+    payload = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "step": step,
+        "config": cfg,
+        "preset": preset,
+        "best_val": best_val,
+        "best_step": best_step,
+        "tokens_seen": tokens_seen,
+        "rng": rng_state(device),
+        "torch_version": torch.__version__,
+    }
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(payload, tmp)
+    tmp.replace(path)
 
 
 def update_symlink(out_dir, name, target):
@@ -392,8 +581,8 @@ def update_symlink(out_dir, name, target):
 def prune_old_checkpoints(out_dir, keep_last):
     """Delete all but the most recent `keep_last` step_*.pt files.
 
-    `best.pt` is now a regular file (not a symlink to a step_*.pt), so
-    pruning step files doesn't risk deleting it.
+    `best.pt` is a regular file (not a symlink to a step_*.pt), so pruning
+    step files doesn't risk deleting it.
     """
     if keep_last <= 0:
         return []
@@ -412,9 +601,8 @@ def prune_old_checkpoints(out_dir, keep_last):
 def recover_best_from_metrics(metrics_path):
     """Scan an existing metrics.jsonl for the best val seen so far.
 
-    Returns (best_val, best_step) or (inf, None) if no eval events found.
-    Used on resume to continue tracking best from where the previous run
-    left off, instead of resetting to inf.
+    Fallback for resuming checkpoints from before best_val was stored in
+    the checkpoint itself. Returns (best_val, best_step) or (inf, None).
     """
     best_val = float("inf")
     best_step = None
@@ -437,11 +625,12 @@ def recover_best_from_metrics(metrics_path):
 # ---------- Metrics + run manifest ----------
 
 
-def write_run_manifest(path, args, cfg, byte_counts, weights):
+def write_run_manifest(path, args, cfg, preset, byte_counts, weights):
     """One-shot snapshot of the run setup. Written at start; never updated."""
     manifest = {
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "run_name": path.parent.name,
+        "preset": preset,
         "args": {
             k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()
         },
@@ -489,15 +678,35 @@ def main() -> None:
     metrics_path = out_dir / "metrics.jsonl"
     metrics_f = open_metrics_log(metrics_path)
 
-    # Build the model from its preset. Always train in fp32 for stability.
-    config_cls, model_cls = MODELS[args.preset]
-    cfg = config_cls(dtype=torch.float32, max_seq_len=args.seq_len)
-    model = model_cls(cfg).to(device)
+    # Build the model. On a fresh run the preset decides the architecture;
+    # on resume the checkpoint's embedded config is authoritative, so a
+    # wrong --preset/--seq-len flag can't silently build a mismatched model.
+    ckpt = None
+    if args.resume is not None:
+        print(f"resuming from {args.resume}")
+        ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
+        cfg = ckpt["config"]
+        preset = ckpt.get("preset", args.preset)
+        if preset != args.preset and "preset" in ckpt:
+            print(f"  note: checkpoint was trained with --preset {preset}; using that")
+        if cfg.max_seq_len != args.seq_len:
+            print(
+                f"  note: checkpoint config has max_seq_len={cfg.max_seq_len}; "
+                f"overriding --seq-len {args.seq_len}"
+            )
+            args.seq_len = cfg.max_seq_len
+        model = build_model(cfg).to(device)
+    else:
+        preset = args.preset
+        config_cls, model_cls = MODELS[preset]
+        cfg = config_cls(dtype=torch.float32, max_seq_len=args.seq_len)
+        model = model_cls(cfg).to(device)
+
     print(
         f"run dir: {out_dir.relative_to(PROJECT_ROOT) if out_dir.is_relative_to(PROJECT_ROOT) else out_dir}"
     )
     print(
-        f"model:   {args.preset} ({model_cls.__name__}), {model.num_parameters():,} params, "
+        f"model:   {preset} ({type(model).__name__}), {model.num_parameters():,} params, "
         f"dtype={cfg.dtype}, device={device}"
     )
 
@@ -508,11 +717,28 @@ def main() -> None:
         betas=(0.9, 0.95),
     )
 
+    # Restore training state from the checkpoint: weights, optimizer
+    # moments, step counter, best-val tracking, token count, RNG streams.
     start_step = 0
-    if args.resume is not None:
-        print(f"resuming from {args.resume}")
-        start_step = load_checkpoint(args.resume, model, optimizer)
-        print(f"resumed at step {start_step}")
+    tokens_seen = 0
+    best_val = float("inf")
+    best_step = None
+    if ckpt is not None:
+        model.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        start_step = int(ckpt["step"])
+        tokens_seen = int(ckpt.get("tokens_seen", start_step * args.batch_size * args.seq_len))
+        if "best_val" in ckpt and ckpt["best_val"] is not None:
+            best_val, best_step = ckpt["best_val"], ckpt.get("best_step")
+        else:  # pre-refactor checkpoint — reconstruct from the event log
+            best_val, best_step = recover_best_from_metrics(metrics_path)
+        if restore_rng_state(ckpt.get("rng"), device):
+            print(f"resumed at step {start_step} (RNG streams restored)")
+        else:
+            print(f"resumed at step {start_step}")
+        if best_step is not None:
+            print(f"best so far: val_loss={best_val:.4f} at step {best_step}")
+        del ckpt  # free the 100s-of-MB state dict copy
 
     if start_step >= args.steps:
         print(f"nothing to do — start_step ({start_step}) >= --steps ({args.steps}).")
@@ -537,11 +763,31 @@ def main() -> None:
     # Run manifest (only on first start; preserves original on resume).
     manifest_path = out_dir / "run.json"
     if not manifest_path.exists():
-        write_run_manifest(manifest_path, args, cfg, byte_counts, norm_weights)
+        write_run_manifest(manifest_path, args, cfg, preset, byte_counts, norm_weights)
+
+    # TensorBoard writer. Resumed runs append to the same tb/ dir; steps
+    # continue from where they left off, so curves join up seamlessly.
+    writer = None
+    if not args.no_tensorboard:
+        if SummaryWriter is None:
+            print("tensorboard not installed — skipping (pip install tensorboard)")
+        else:
+            writer = SummaryWriter(log_dir=str(out_dir / "tb"))
+            if start_step == 0:
+                config_md = json.dumps(
+                    {k: str(v) for k, v in asdict(cfg).items()}, indent=2
+                )
+                writer.add_text("run/config", f"```\n{config_md}\n```", 0)
+                writer.add_text("run/preset", preset, 0)
+
+    monitor = MoEMonitor(model)
+    if monitor.names:
+        print(f"tracking {len(monitor.names)} MoE layers for load balance")
 
     print(
         f"training from step {start_step + 1} to {args.steps} "
-        f"(batch={args.batch_size}, seq_len={args.seq_len}, lr={args.lr})"
+        f"(batch={args.batch_size}, seq_len={args.seq_len}, lr={args.lr}, "
+        f"schedule={args.lr_schedule})"
     )
     print()
 
@@ -549,10 +795,12 @@ def main() -> None:
         metrics_f,
         event="start",
         step=start_step,
+        preset=preset,
         total_steps=args.steps,
         batch_size=args.batch_size,
         seq_len=args.seq_len,
         lr=args.lr,
+        lr_schedule=args.lr_schedule,
         resumed=args.resume is not None,
     )
 
@@ -566,15 +814,12 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, sigint_handler)
 
-    # On resume, recover best_val/best_step from the existing metrics log so
-    # we keep tracking the historical best instead of starting from inf.
-    if args.resume is not None:
-        best_val, best_step = recover_best_from_metrics(metrics_path)
-        if best_step is not None:
-            print(f"recovered best so far: val_loss={best_val:.4f} at step {best_step}")
-    else:
-        best_val = float("inf")
-        best_step = None
+    def full_save(path, step):
+        save_checkpoint(
+            path, model, optimizer, step, cfg,
+            preset=preset, best_val=best_val, best_step=best_step,
+            tokens_seen=tokens_seen, device=device,
+        )
 
     model.train()
     t_start = time.perf_counter()
@@ -586,6 +831,13 @@ def main() -> None:
             if interrupted["flag"]:
                 break
 
+            lr = lr_at(step, args)
+            for group in optimizer.param_groups:
+                group["lr"] = lr
+
+            is_log_step = step == start_step + 1 or step % args.log_every == 0
+            monitor.enabled = is_log_step
+
             inputs, targets = get_batch(
                 train_data, weights, args.batch_size, args.seq_len
             )
@@ -594,28 +846,53 @@ def main() -> None:
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
+            monitor.enabled = False
             n_done += 1
             last_step_done = step
+            tokens_seen += args.batch_size * args.seq_len
 
-            if step == start_step + 1 or step % args.log_every == 0:
+            if is_log_step:
                 elapsed = time.perf_counter() - t_start
                 tps = n_done * args.batch_size * args.seq_len / elapsed
                 steps_left = args.steps - step
                 eta = (elapsed / n_done) * steps_left
+                loss_val = float(loss.item())
+                gnorm = float(grad_norm.item())
+                mem = device_mem_gb(device)
                 print(
-                    f"step {step:>5}/{args.steps}  train_loss={loss.item():.4f}  "
-                    f"({tps:>6.0f} tok/s)  ETA {fmt_eta(eta)}"
+                    f"step {step:>5}/{args.steps}  train_loss={loss_val:.4f}  "
+                    f"bpb={loss_val / LN2:.3f}  grad_norm={gnorm:.2f}  "
+                    f"lr={lr:.2e}  ({tps:>6.0f} tok/s)  ETA {fmt_eta(eta)}"
                 )
                 emit(
                     metrics_f,
                     event="step",
                     step=step,
-                    train_loss=float(loss.item()),
+                    train_loss=loss_val,
+                    bpb=loss_val / LN2,
+                    lr=lr,
+                    grad_norm=gnorm,
                     tok_per_sec=tps,
+                    tokens_seen=tokens_seen,
                     eta_s=eta,
+                    **monitor.summary(),
                 )
+                if writer is not None:
+                    writer.add_scalar("train/loss", loss_val, step)
+                    writer.add_scalar("train/bpb", loss_val / LN2, step)
+                    writer.add_scalar("train/lr", lr, step)
+                    writer.add_scalar("train/grad_norm", gnorm, step)
+                    writer.add_scalar("train/tok_per_sec", tps, step)
+                    writer.add_scalar("train/tokens_seen", tokens_seen, step)
+                    if mem is not None:
+                        writer.add_scalar("train/mem_gb", mem, step)
+                    for name, load in monitor.loads.items():
+                        writer.add_scalar(f"moe/{name}_max_load", float(load.max()), step)
+                        writer.add_scalar(f"moe/{name}_entropy", monitor.entropy(load), step)
+                    for name, span in monitor.bias_spans.items():
+                        writer.add_scalar(f"moe/{name}_bias_span", span, step)
 
             if step % args.eval_every == 0:
                 val = eval_loss(
@@ -630,12 +907,29 @@ def main() -> None:
                 if is_best:
                     best_val = val
                     best_step = step
-                    # Save best.pt as a regular file (not a symlink) immediately
-                    # at the eval that produced the new best. This avoids the
-                    # eval-vs-save alignment bug.
-                    save_checkpoint(out_dir / "best.pt", model, optimizer, step, cfg)
-                print(f"        val_loss={val:.4f}" + ("  ← best" if is_best else ""))
-                emit(metrics_f, event="eval", step=step, val_loss=val, is_best=is_best)
+                    # Save best.pt immediately at the eval that produced the
+                    # new best — no eval-vs-save alignment gap.
+                    full_save(out_dir / "best.pt", step)
+                pnorm = global_param_norm(model)
+                print(
+                    f"        val_loss={val:.4f}  val_bpb={val / LN2:.3f}"
+                    + ("  ← best" if is_best else "")
+                )
+                emit(
+                    metrics_f,
+                    event="eval",
+                    step=step,
+                    val_loss=val,
+                    val_bpb=val / LN2,
+                    param_norm=pnorm,
+                    is_best=is_best,
+                )
+                if writer is not None:
+                    writer.add_scalar("val/loss", val, step)
+                    writer.add_scalar("val/bpb", val / LN2, step)
+                    writer.add_scalar("val/best", best_val, step)
+                    writer.add_scalar("params/global_norm", pnorm, step)
+                    writer.flush()
 
             if step % args.sample_every == 0 and not args.no_sample:
                 text = sample_text(
@@ -651,13 +945,15 @@ def main() -> None:
                     prompt=args.sample_prompt,
                     text=text,
                 )
+                if writer is not None:
+                    writer.add_text("samples", f"```\n{text}\n```", step)
 
             if step % args.save_every == 0:
-                ckpt = out_dir / f"step_{step}.pt"
-                save_checkpoint(ckpt, model, optimizer, step, cfg)
-                update_symlink(out_dir, "latest.pt", ckpt)
+                ckpt_path = out_dir / f"step_{step}.pt"
+                full_save(ckpt_path, step)
+                update_symlink(out_dir, "latest.pt", ckpt_path)
                 pruned = prune_old_checkpoints(out_dir, args.keep_last)
-                msg = f"        saved {ckpt.name}  (latest -> {ckpt.name})"
+                msg = f"        saved {ckpt_path.name}  (latest -> {ckpt_path.name})"
                 if pruned:
                     msg += f"  pruned {len(pruned)}"
                 print(msg)
@@ -665,18 +961,18 @@ def main() -> None:
                     metrics_f,
                     event="save",
                     step=step,
-                    path=ckpt.name,
+                    path=ckpt_path.name,
                     pruned=len(pruned),
                 )
     finally:
         # Always: save an interrupted/final checkpoint so we never lose work.
         elapsed = time.perf_counter() - t_start
         if interrupted["flag"]:
-            ckpt = out_dir / "interrupted.pt"
-            save_checkpoint(ckpt, model, optimizer, last_step_done, cfg)
-            update_symlink(out_dir, "latest.pt", ckpt)
+            ckpt_path = out_dir / "interrupted.pt"
+            full_save(ckpt_path, last_step_done)
+            update_symlink(out_dir, "latest.pt", ckpt_path)
             print(f"\ninterrupted at step {last_step_done} after {elapsed:.1f}s")
-            print(f"  saved {ckpt.name}; resume with --resume {ckpt}")
+            print(f"  saved {ckpt_path.name}; resume with --resume {ckpt_path}")
             emit(metrics_f, event="interrupted", step=last_step_done, elapsed_s=elapsed)
         elif n_done > 0:
             print(
@@ -687,7 +983,7 @@ def main() -> None:
             # saved this step (i.e. last_step_done % save_every == 0).
             final = out_dir / f"step_{last_step_done}.pt"
             if not final.exists():
-                save_checkpoint(final, model, optimizer, last_step_done, cfg)
+                full_save(final, last_step_done)
                 update_symlink(out_dir, "latest.pt", final)
                 prune_old_checkpoints(out_dir, args.keep_last)
             print(f"final checkpoint: {final.name}")
@@ -698,9 +994,12 @@ def main() -> None:
                 event="end",
                 step=last_step_done,
                 elapsed_s=elapsed,
+                tokens_seen=tokens_seen,
                 best_val=best_val if best_step else None,
                 best_step=best_step,
             )
+        if writer is not None:
+            writer.close()
         metrics_f.close()
         # Restore stdout/stderr and close the log file.
         sys.stdout = sys.__stdout__

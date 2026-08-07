@@ -63,7 +63,15 @@ Models (see `transformer/models/`, one self-documenting file each):
 
 # Sample from the latest checkpoint (architecture is recovered from the checkpoint)
 .venv/bin/python scripts/sample.py --checkpoint checkpoints/<run>/latest.pt --temperature 0.8
+
+# Watch a run live (loss/bpb, LR, grad norm, val, per-layer MoE expert load, samples)
+.venv/bin/tensorboard --logdir checkpoints/<run>/tb
 ```
+
+Training is exactly resumable: checkpoints embed the model config, optimizer
+state, RNG streams, best-val tracking, and token count, and are written
+atomically — `--resume <ckpt>` continues the identical run (Ctrl-C saves an
+`interrupted.pt` first).
 
 Note: the kimi3 preset's KDA layers run a reference sequential scan (the
 chunkwise kernel from the paper is not implemented), so training speed drops
