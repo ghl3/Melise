@@ -58,6 +58,7 @@ from run_utils import (
     BucketSync,
     MoEMonitor,
     Tee,
+    checkpoint_identity,
     derive_run_name,
     emit,
     fmt_eta,
@@ -168,10 +169,18 @@ def main() -> None:
     elif args.resume is not None:
         out_dir = args.resume.parent.resolve()
     else:
-        name = args.run_name or derive_run_name(
-            "sft", args.init, preset, model.num_parameters())
+        name = args.run_name or derive_run_name("sft", ckpt, args.init)
         out_dir = (PROJECT_ROOT / "checkpoints" / "sft" / name).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Lineage: identity comes from the loaded checkpoint's metadata (or,
+    # for pre-metadata checkpoints, its dir name); this run appends
+    # itself to the ancestor chain.
+    identity = checkpoint_identity(ckpt, src)
+    if args.resume is not None:
+        lineage = ckpt.get("lineage") or [out_dir.name]
+    else:
+        lineage = (ckpt.get("lineage") or [src.resolve().parent.name]) + [out_dir.name]
 
     log_file = open(out_dir / "train.log", "a", buffering=1)
     sys.stdout = Tee(sys.__stdout__, log_file)
@@ -181,6 +190,7 @@ def main() -> None:
     print(f"run dir: {out_dir.relative_to(PROJECT_ROOT) if out_dir.is_relative_to(PROJECT_ROOT) else out_dir}")
     print(f"model:   {preset} ({type(model).__name__}), "
           f"{model.num_parameters():,} params, seq_len={cfg.max_seq_len}, device={device}")
+    print(f"lineage: {' -> '.join(lineage)}")
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
@@ -218,6 +228,8 @@ def main() -> None:
         manifest_path.write_text(json.dumps({
             "started_at": datetime.now().isoformat(timespec="seconds"),
             "run_name": out_dir.name,
+            "identity": identity,
+            "lineage": lineage,
             "kind": "sft",
             "preset": preset,
             "n_params": model.num_parameters(),
@@ -251,7 +263,9 @@ def main() -> None:
     def full_save(path, step):
         save_checkpoint(path, model, optimizer, step, cfg, preset=preset,
                         best_val=best_val, best_step=best_step,
-                        tokens_seen=tokens_seen, device=device)
+                        tokens_seen=tokens_seen, device=device,
+                        run_name=out_dir.name, identity=identity, stage="sft",
+                        lineage=lineage)
 
     model.train()
     t_start = time.perf_counter()

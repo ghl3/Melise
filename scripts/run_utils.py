@@ -54,45 +54,59 @@ def fmt_params(n: int) -> str:
     return f"{round(n / 1e6)}M"
 
 
-def generate_run_name(preset: str, n_params: int) -> str:
-    """Return e.g. 'kimi3-medium-66M-calm-river-20260503-141522'.
-
-    Leads with the architecture preset and parameter count so run dirs
-    (and TensorBoard labels) identify the model at a glance. Uses a
-    separate time-seeded RNG so the chosen name is independent of --seed.
-    """
+def fresh_identity(preset: str, n_params: int) -> str:
+    """Mint the stable lineage core for a NEW model, e.g.
+    'kimi3-small-17M-scarlet-harbor'. This exact string threads through
+    every later training generation (sft-<identity>-<ts>,
+    rlvr-<identity>-<ts>) and is stored in every checkpoint the chain
+    saves. Uses a separate time-seeded RNG so the name is independent of
+    --seed."""
     rng = random.Random()  # seeded from os.urandom
-    adj = rng.choice(_ADJECTIVES)
-    noun = rng.choice(_NOUNS)
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{preset}-{fmt_params(n_params)}-{adj}-{noun}-{ts}"
+    return (f"{preset}-{fmt_params(n_params)}-"
+            f"{rng.choice(_ADJECTIVES)}-{rng.choice(_NOUNS)}")
+
+
+def stamp(identity: str) -> str:
+    """identity -> run name: append a launch timestamp. Timestamps
+    distinguish repeat runs of the same lineage; exact parentage lives in
+    checkpoint metadata ('lineage') and run.json ('init')."""
+    return f"{identity}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+
+def generate_run_name(preset: str, n_params: int) -> str:
+    """Fresh identity + timestamp, e.g. 'kimi3-medium-66M-calm-river-20260503-141522'."""
+    return stamp(fresh_identity(preset, n_params))
 
 
 _TS_SUFFIX = re.compile(r"-\d{8}-\d{6}$")
+_STAGE_PREFIX = re.compile(r"^(sft|rlvr|grpo)-")
 
 
-def derive_run_name(stage: str, init_path: Path, preset: str, n_params: int) -> str:
-    """Run name for a derived stage, keeping the ancestor's identity so
-    lineage is readable in TensorBoard and checkpoint paths:
+def strip_run_identity(run_name: str) -> str:
+    """Identity from a run/dir name (drop stage prefix + timestamp).
+    Legacy fallback only — checkpoints saved since 2026-08-08 carry
+    'identity' in their payload, which is authoritative."""
+    return _TS_SUFFIX.sub("", _STAGE_PREFIX.sub("", run_name))
 
-        sft  from pretrain/kimi3-small-17M-scarlet-harbor-<ts>/best.pt
-             -> sft-kimi3-small-17M-scarlet-harbor-<new ts>
-        rlvr from sft/sft-kimi3-small-17M-scarlet-harbor-<ts>/best.pt
-             -> rlvr-kimi3-small-17M-scarlet-harbor-<new ts>
 
-    The base run's adjective-noun name threads through the whole chain;
-    timestamps distinguish repeat attempts (exact parentage is always in
-    run.json's "init"). Falls back to a fresh generate_run_name when the
-    parent dir doesn't follow the naming scheme."""
-    parent = init_path.resolve().parent.name
-    for prefix in ("sft-", "rlvr-", "grpo-"):
-        if parent.startswith(prefix):
-            parent = parent[len(prefix):]
-    identity = _TS_SUFFIX.sub("", parent)
-    if not identity:
-        return f"{stage}-{generate_run_name(preset, n_params)}"
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{stage}-{identity}-{ts}"
+def checkpoint_identity(payload: dict, ckpt_path: Path) -> str:
+    """The lineage identity of a loaded checkpoint: the embedded
+    'identity' field, or (for pre-metadata checkpoints) parsed from the
+    checkpoint's run dir name."""
+    return payload.get("identity") or strip_run_identity(
+        ckpt_path.resolve().parent.name)
+
+
+def derive_run_name(stage: str, payload: dict, ckpt_path: Path) -> str:
+    """Run name for a derived stage: same identity as the checkpoint it
+    initializes from, so lineage reads directly off TensorBoard and
+    checkpoint paths:
+
+        pretrain/kimi3-small-17M-scarlet-harbor-<ts>
+          -> sft/sft-kimi3-small-17M-scarlet-harbor-<new ts>
+          -> rlvr/rlvr-kimi3-small-17M-scarlet-harbor-<new ts>
+    """
+    return f"{stage}-{stamp(checkpoint_identity(payload, ckpt_path))}"
 
 
 # ---------- Console/formatting ----------
@@ -175,10 +189,17 @@ def restore_rng_state(state: dict | None, device: torch.device) -> bool:
 
 
 def save_checkpoint(path, model, optimizer, step, cfg, *, preset, best_val,
-                    best_step, tokens_seen, device):
+                    best_step, tokens_seen, device, run_name=None,
+                    identity=None, stage=None, lineage=None):
     """Atomic write: serialize to a tmp file in the same directory, then
     rename over the target. A Ctrl-C mid-save can never leave a truncated
-    checkpoint at `path`."""
+    checkpoint at `path`.
+
+    Provenance metadata rides in the payload so downstream stages never
+    have to parse file names: `identity` is the stable lineage core
+    ('kimi3-small-17M-scarlet-harbor'), `run_name`/`stage` identify the
+    run that wrote this checkpoint, and `lineage` lists run names from
+    the pretrain root down to this run."""
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "model": model.state_dict(),
@@ -186,6 +207,10 @@ def save_checkpoint(path, model, optimizer, step, cfg, *, preset, best_val,
         "step": step,
         "config": cfg,
         "preset": preset,
+        "run_name": run_name,
+        "identity": identity,
+        "stage": stage,
+        "lineage": lineage,
         "best_val": best_val,
         "best_step": best_step,
         "tokens_seen": tokens_seen,

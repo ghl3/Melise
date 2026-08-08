@@ -65,6 +65,7 @@ from transformer.rl import (
 from run_utils import (
     BucketSync,
     Tee,
+    checkpoint_identity,
     derive_run_name,
     emit,
     fmt_eta,
@@ -174,10 +175,17 @@ def main() -> None:
     if args.out is not None:
         out_dir = args.out
     elif args.resume is None:
-        name = args.run_name or derive_run_name(
-            "rlvr", init_path, preset, model.num_parameters())
+        name = args.run_name or derive_run_name("rlvr", ckpt, init_path)
         out_dir = (PROJECT_ROOT / "checkpoints" / "rlvr" / name).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Lineage: identity from the loaded checkpoint's metadata (legacy
+    # fallback: its dir name); this run appends itself to the chain.
+    identity = checkpoint_identity(ckpt, src)
+    if args.resume is not None:
+        lineage = ckpt.get("lineage") or [out_dir.name]
+    else:
+        lineage = (ckpt.get("lineage") or [src.resolve().parent.name]) + [out_dir.name]
 
     log_file = open(out_dir / "train.log", "a", buffering=1)
     sys.stdout = Tee(sys.__stdout__, log_file)
@@ -190,6 +198,7 @@ def main() -> None:
     print(f"tasks:   {', '.join(task_names)}  "
           f"(P={args.prompts_per_step} × G={args.group_size} rollouts/step, "
           f"max_new={args.max_new})")
+    print(f"lineage: {' -> '.join(lineage)}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,
                                   weight_decay=args.weight_decay, betas=(0.9, 0.95))
@@ -216,6 +225,8 @@ def main() -> None:
         manifest_path.write_text(json.dumps({
             "started_at": datetime.now().isoformat(timespec="seconds"),
             "run_name": out_dir.name,
+            "identity": identity,
+            "lineage": lineage,
             "kind": "rlvr-grpo",
             "preset": preset,
             "n_params": model.num_parameters(),
@@ -245,7 +256,9 @@ def main() -> None:
     def full_save(path, step):
         save_checkpoint(path, model, optimizer, step, cfg, preset=preset,
                         best_val=best_reward if best_step else None,
-                        best_step=best_step, tokens_seen=tokens_seen, device=device)
+                        best_step=best_step, tokens_seen=tokens_seen, device=device,
+                        run_name=out_dir.name, identity=identity, stage="rlvr",
+                        lineage=lineage)
 
     model.train()
     t_start = time.perf_counter()

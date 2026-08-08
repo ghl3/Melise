@@ -91,6 +91,7 @@ from run_utils import (
     recover_best_from_metrics,
     restore_rng_state,
     save_checkpoint,
+    strip_run_identity,
     update_symlink,
 )
 
@@ -283,6 +284,7 @@ def write_run_manifest(path, args, cfg, preset, n_params, byte_counts, weights):
     manifest = {
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "run_name": path.parent.name,
+        "identity": strip_run_identity(path.parent.name),
         "kind": "pretrain",
         "preset": preset,
         "n_params": n_params,
@@ -340,6 +342,12 @@ def main() -> None:
     out_dir = resolve_run_dir(args, preset, model.num_parameters())
     out_dir.mkdir(parents=True, exist_ok=True)
     args.out = out_dir
+
+    # Lineage identity: from the checkpoint on resume (authoritative),
+    # else derived from this new run's own name.
+    identity = (ckpt.get("identity") if ckpt is not None else None) \
+        or strip_run_identity(out_dir.name)
+    lineage = (ckpt.get("lineage") if ckpt is not None else None) or [out_dir.name]
 
     # Mirror stdout to a per-run train.log. Closed in the finally block.
     log_file = open(out_dir / "train.log", "a", buffering=1)
@@ -500,6 +508,8 @@ def main() -> None:
             path, model, optimizer, step, cfg,
             preset=preset, best_val=best_val, best_step=best_step,
             tokens_seen=tokens_seen, device=device,
+            run_name=out_dir.name, identity=identity, stage="pretrain",
+            lineage=lineage,
         )
 
     model.train()
