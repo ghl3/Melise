@@ -47,8 +47,8 @@ healthy selection gap:
 |---|---|---|---|---|
 | scarlet-harbor | 17M | 338M | 1.523 | **1.560** |
 | crisp-harbor | 17M | 65M | 1.864 | 1.880 |
-| stormy-summit | 66M | 25M | 1.894 | (evaluated post-session) |
-| fierce-tide | 180M | 11M | 1.959 | (evaluated post-session) |
+| stormy-summit | 66M | 25M | 1.894 | 1.927 |
+| fierce-tide | 180M | 11M | 1.959 | 2.004 |
 
 Pipeline (single chained launch, both stages exit 0):
 
