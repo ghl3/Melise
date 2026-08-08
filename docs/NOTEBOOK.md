@@ -108,3 +108,68 @@ full lineage recorded).
 - Round-two post-training: 3× longer SFT; GRPO with lower LR / higher
   KL; redesigned arith cold-start.
 - Deferred by choice: DPO trainer; chat UI ("full site" planned).
+
+---
+
+## 2026-08-08 (evening) — Generation-2 readiness: tokenizer, hardened pipeline
+
+**Goal.** Execute the post-dry-run improvement list so the next major
+pretrain→RLVR generation launches clean: build and integrate the BPE
+tokenizer end-to-end, fix the arith cold-start design flaw, speed up
+GRPO rollouts, add the missing diagnostics, and make long runs
+self-healing.
+
+**Setup / work done.**
+- **Tokenizer**: `configs/tokenizer-bpe4k.json` — byte-level BPE, 4096
+  vocab, trained on all 40 corpora. Digits pre-split to single tokens
+  (multi-digit merges are a known arithmetic killer). Special tokens are
+  the chat template's control characters pinned to ids 0–4, identical
+  under the byte tokenizer — chat corpora need no re-encoding, and
+  content can never spell a special id (encode strips those chars).
+  Threaded everywhere: config `tokenizer` field serialized into
+  checkpoints; token-cached corpus loading (byte-slice first, so the
+  enwik8 test boundaries stay byte-identical); token-budget conversation
+  splitting; eval bpb normalized by slice BYTES (comparable across
+  encodings); rollouts stop on the end-turn id. kimi3-small becomes
+  18.8M params with the 4096-vocab tables. Compression ≈ 3.0 bytes/token
+  prose, 2.45 code, 2.63 enwik8.
+- **Arith cold-start v2**: scorers read the LAST integer (showing work
+  is rewarded, not punished); canonical answers decompose through the
+  nearest ten on carry/borrow ("47 + 3 = 50, 50 + 5 = 55. 55");
+  chat_tasks.txt regenerated and re-uploaded.
+- **GRPO rollout batching**: equal-length prompts decode as one KV-cache
+  batch (several whole groups per forward pass; rectangular prefill only
+  — KDA has no clean left-padding).
+- **New diagnostics**: GRPO `rollout/dead_frac` (zero-variance groups =
+  the cold-start gauge) and `rollout/entropy` (collapse early-warning);
+  SFT `val/tasks_bpb` (cold-start progress apart from chat loss).
+- **`scripts/pipeline.sh`**: resume-aware 3-stage runner (env-var
+  recipe; `--resume` continues any interrupted stage;
+  `--install-boot-resume` crontab hook makes Spot preemption self-heal);
+  finishes with test-slice evals of all three stages' best.pt — the
+  catastrophic-forgetting check.
+- **Ops**: laptop TensorBoard reads the bucket directly
+  (`scripts/tb_bucket.sh`; ADC + gcsfs + certifi). Repo history now
+  backed up as a git bundle in the bucket (was laptop-only). A100 quota
+  preference filed (us-central1, pending). gcloud SDK 437→579 replaced
+  gcloud-crc32c without re-triggering Gatekeeper.
+
+**Results.** 30/30 tests across three suites (architectures,
+post-training, tokenizer). Full toy pretrain→SFT→GRPO chain verified
+under bpe4k on MPS: checkpoints carry `tokenizer=bpe4k, vocab=4096`,
+lineage threads, new metrics live (dead_frac correctly read 100% on an
+untrained policy). VM updated and passing the same tests.
+
+**Learnings.**
+- Digit-isolated BPE + last-integer scoring resolves the conflict
+  between worked-steps arithmetic data and reward scoring — the design
+  flaw behind arith's 0.20 plateau.
+- Pinning special-token ids identically across tokenizers (0–4) made
+  the entire chat/RL stack encoding-agnostic almost for free.
+- macOS framework Python's missing CA certs bit a third time (gcsfs);
+  `SSL_CERT_FILE` + certifi is the once-and-for-all wrapper fix.
+
+**Next steps.** Launch generation-2 with `scripts/pipeline.sh`
+(kimi3/bpe4k, seq 2048, 25k/9k/600 steps, GRPO lr 1e-5) — on Spot with
+the boot-resume hook. GPU quota window (1→3) opens 2026-08-09 ~19:20 UTC;
+add medium-BPE at Chinchilla in parallel if granted.
