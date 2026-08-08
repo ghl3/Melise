@@ -111,6 +111,15 @@ CUDA and fall back to a reference sequential scan elsewhere (MPS/CPU), so
 non-CUDA training speed drops with `--seq-len`; 128–256 is comfortable on
 MPS. Real SFT/GRPO runs belong on the CUDA VM.
 
+## Experiment notebook
+
+[docs/NOTEBOOK.md](docs/NOTEBOOK.md) is the running log of experimental
+sessions — one dated entry per session, appended chronologically. Each
+entry records **Goal / Setup / Results / Learnings / Next steps**, with
+the numbers (bpb, rewards, throughput) and any incidents worth
+remembering. New sessions append an entry rather than editing history;
+corrections go in a later entry.
+
 ## Tests
 
 ```bash
