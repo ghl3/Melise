@@ -59,7 +59,7 @@ from transformer.rl import (
     group_advantages,
     grpo_loss,
     pad_rollouts,
-    rollout_group,
+    rollout_batch,
     sample_tasks,
 )
 
@@ -274,22 +274,40 @@ def main() -> None:
             # ----- Rollout phase (transformer.rl.rollout) -----
             task_rng = random.Random(f"{args.seed}-{step}")
             tasks = sample_tasks(task_names, args.prompts_per_step, task_rng)
-            seqs = []  # (prompt_ids, completion_tokens, old_lp_row)
-            rewards_pg = torch.zeros(len(tasks), args.group_size)
+            # Rollouts batch across prompts of EQUAL length (KDA state
+            # has no clean left-padding, so rectangular prefill only) —
+            # task templates collide on length constantly, so most steps
+            # decode several whole groups per forward pass. seqs is
+            # indexed (pi·G + gi) to match the advantage flatten order.
+            G = args.group_size
+            prompts = [make_prompt_ids(t.prompt, tok) for t in tasks]
+            seqs = [None] * (len(tasks) * G)
+            rewards_pg = torch.zeros(len(tasks), G)
             kind_scores = defaultdict(list)
-            for pi, task in enumerate(tasks):
-                prompt = make_prompt_ids(task.prompt, tok)
-                comps, lps, lengths = rollout_group(
-                    model, prompt, args.group_size, args.max_new,
-                    args.temperature, device, stop_id=tok.end_turn_id)
-                for gi, comp in enumerate(comps):
-                    r = task.score(tok.decode(comp).strip())
-                    if comp[-1] != tok.end_turn_id:
-                        r -= args.no_stop_penalty
-                    rewards_pg[pi, gi] = r
-                    kind_scores[task.kind].append(r)
-                    seqs.append((prompt, comp, lps[gi, : len(comp)].cpu()))
-                tokens_seen += args.group_size * (len(prompt) + max(lengths))
+            by_len = defaultdict(list)
+            for pi, p in enumerate(prompts):
+                by_len[len(p)].append(pi)
+            groups_per_batch = max(64 // G, 1)
+            for length, pis in by_len.items():
+                for lo in range(0, len(pis), groups_per_batch):
+                    chunk = pis[lo : lo + groups_per_batch]
+                    rows = [prompts[pi] for pi in chunk for _ in range(G)]
+                    comps, lps, lengths = rollout_batch(
+                        model, rows, args.max_new, args.temperature,
+                        device, stop_id=tok.end_turn_id)
+                    for j, pi in enumerate(chunk):
+                        task = tasks[pi]
+                        for gi in range(G):
+                            comp = comps[j * G + gi]
+                            r = task.score(tok.decode(comp).strip())
+                            if comp[-1] != tok.end_turn_id:
+                                r -= args.no_stop_penalty
+                            rewards_pg[pi, gi] = r
+                            kind_scores[task.kind].append(r)
+                            seqs[pi * G + gi] = (
+                                prompts[pi], comp,
+                                lps[j * G + gi, : len(comp)].cpu())
+                    tokens_seen += len(rows) * (length + max(lengths))
 
             # Dead groups produce zero advantage — the direct gauge of
             # the cold-start problem (tasks the policy never varies on).

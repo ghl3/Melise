@@ -12,7 +12,12 @@ turns the same tasks into cold-start SFT data.
 """
 
 from .grpo import RolloutBatch, group_advantages, grpo_loss, pad_rollouts
-from .rollout import eval_rewards, gather_completion_logprobs, rollout_group
+from .rollout import (
+    eval_rewards,
+    gather_completion_logprobs,
+    rollout_batch,
+    rollout_group,
+)
 from .tasks import TASKS, Task, sample_tasks
 
 __all__ = [
@@ -24,6 +29,7 @@ __all__ = [
     "group_advantages",
     "grpo_loss",
     "pad_rollouts",
+    "rollout_batch",
     "rollout_group",
     "sample_tasks",
 ]

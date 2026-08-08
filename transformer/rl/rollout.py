@@ -20,23 +20,27 @@ from .tasks import sample_tasks
 
 
 @torch.no_grad()
-def rollout_group(model, prompt, n: int, max_new: int, temperature: float,
+def rollout_batch(model, prompts, max_new: int, temperature: float,
                   device, greedy: bool = False, stop_id: int = END_TURN):
-    """Decode `n` completions of one prompt (a token-id sequence) in a
-    single batch.
+    """Decode one completion per prompt, all in a single KV-cache batch.
+    Every prompt must have the SAME length — equal lengths keep prefill
+    rectangular with no padding, which matters because KDA's recurrent
+    state has no clean notion of left-padding.
 
     Returns (completions, old_lp, lengths):
-      completions  list of n token-id lists, each cut at its stop_id
+      completions  list of token-id lists, each cut at its stop_id
                    (inclusive) or max_new
       old_lp       (n, T) log-probs of the sampled tokens under the
                    policy that sampled them (raw logits, untempered)
-      lengths      (n,) completion lengths
+      lengths      completion lengths
 
     stop_id defaults to the end-turn id, which is 3 under every
     tokenizer (byte template and BPE specials are pinned identically).
     """
-    max_new = min(max_new, model.cfg.max_seq_len - len(prompt))
-    ids = torch.tensor([list(prompt)] * n, device=device, dtype=torch.long)
+    n, plen = len(prompts), len(prompts[0])
+    assert all(len(p) == plen for p in prompts), "prompts must share one length"
+    max_new = min(max_new, model.cfg.max_seq_len - plen)
+    ids = torch.tensor([list(p) for p in prompts], device=device, dtype=torch.long)
     cache = model.new_cache(n, device)
     logits = model(ids, kv_cache=cache)[:, -1]  # (n, V)
 
@@ -64,6 +68,15 @@ def rollout_group(model, prompt, n: int, max_new: int, temperature: float,
         completions.append(row[:cut])
         lengths.append(cut)
     return completions, lps, lengths
+
+
+@torch.no_grad()
+def rollout_group(model, prompt, n: int, max_new: int, temperature: float,
+                  device, greedy: bool = False, stop_id: int = END_TURN):
+    """Decode `n` completions of ONE prompt (a GRPO group) in a single
+    batch. Thin wrapper over rollout_batch."""
+    return rollout_batch(model, [list(prompt)] * n, max_new, temperature,
+                         device, greedy=greedy, stop_id=stop_id)
 
 
 def gather_completion_logprobs(model, ids, pos, tok):

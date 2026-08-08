@@ -59,9 +59,30 @@ class Task:
     score: Callable[[str], float] = field(repr=False)
 
 
-def _first_int(text: str) -> int | None:
-    m = _FIRST_INT.search(text)
-    return int(m.group()) if m else None
+def _last_int(text: str) -> int | None:
+    """The LAST integer in a reply is its answer. This is what lets
+    worked-steps responses ('47 + 3 = 50, 50 + 5 = 55. 55') score
+    correctly — intermediate results appear before the answer, never
+    after. First-int scoring would punish showing work."""
+    m = _FIRST_INT.findall(text)
+    return int(m[-1]) if m else None
+
+
+def _worked(a: int, b: int, sub: bool) -> str:
+    """Canonical worked-steps answer: decompose through the nearest ten
+    when a carry/borrow is involved, then state the answer last (the
+    scorer reads the last integer)."""
+    if sub:
+        total, step = a - b, a % 10
+        if 0 < step < b:
+            mid = a - step
+            return f"{a} - {step} = {mid}, {mid} - {b - step} = {total}. {total}"
+        return f"{a} - {b} = {total}"
+    total, step = a + b, (10 - a % 10) % 10
+    if 0 < step < b:
+        mid = a + step
+        return f"{a} + {step} = {mid}, {mid} + {b - step} = {total}. {total}"
+    return f"{a} + {b} = {total}"
 
 
 def make_copy(rng: random.Random) -> Task:
@@ -76,16 +97,19 @@ def make_copy(rng: random.Random) -> Task:
 
 
 def make_arith(rng: random.Random) -> Task:
-    """Two-operand addition/subtraction, answer ≤ 2 digits. All-or-nothing
-    on the first integer in the reply."""
+    """Two-operand addition/subtraction. All-or-nothing on the LAST
+    integer in the reply, so the model may (and the canonical answer
+    does) show carry/borrow steps before answering — cold-start SFT
+    teaches the decomposition pattern, not just the result."""
     a, b = rng.randint(2, 99), rng.randint(2, 99)
-    if rng.random() < 0.5:
-        prompt, answer = f"What is {a} + {b}?", a + b
-    else:
+    sub = rng.random() < 0.5
+    if sub:
         a, b = max(a, b), min(a, b)
         prompt, answer = f"What is {a} - {b}?", a - b
-    return Task("arith", prompt, str(answer),
-                lambda t: float(_first_int(t) == answer))
+    else:
+        prompt, answer = f"What is {a} + {b}?", a + b
+    return Task("arith", prompt, _worked(a, b, sub),
+                lambda t: float(_last_int(t) == answer))
 
 
 def make_parity(rng: random.Random) -> Task:
@@ -111,7 +135,7 @@ def make_count_letter(rng: random.Random) -> Task:
         "count",
         f"How many times does the letter '{letter}' appear in '{word}'?",
         str(answer),
-        lambda t: float(_first_int(t) == answer),
+        lambda t: float(_last_int(t) == answer),
     )
 
 
