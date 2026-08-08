@@ -92,8 +92,9 @@ def parse_args() -> argparse.Namespace:
                    help="Base checkpoint to fine-tune (a pretrain.py best.pt)")
     g.add_argument("--resume", type=Path, default=None,
                    help="SFT checkpoint to resume (continues its run dir)")
-    g.add_argument("--seq-len", type=int, default=1024,
-                   help="Max conversation length in bytes; model is rebuilt to this")
+    g.add_argument("--seq-len", type=int, default=2048,
+                   help="Max conversation length in bytes; model is rebuilt to this "
+                   "(clean for NoPE models regardless of pretrain seq-len)")
 
     g = p.add_argument_group("training")
     g.add_argument("--steps", type=int, default=3000)
@@ -215,13 +216,15 @@ def main() -> None:
         return
 
     data_paths = args.data or sorted((PROJECT_ROOT / "data").glob("chat_*.txt"))
-    train_convs, val_convs = load_conversations(data_paths, args.seed, args.val_frac)
+    train_convs, val_convs = load_conversations(
+        data_paths, args.seed, args.val_frac, seq_len=args.seq_len)
     n_bytes = sum(len(c) for c in train_convs)
-    print(f"data: {len(train_convs):,} train / {len(val_convs):,} val conversations "
-          f"({n_bytes / 1e6:.1f} MB train) from {[p.name for p in data_paths]}")
+    print(f"data: {len(train_convs):,} train / {len(val_convs):,} val examples "
+          f"({n_bytes / 1e6:.1f} MB train; long conversations split at turn "
+          f"boundaries to fit seq_len) from {[p.name for p in data_paths]}")
     truncated = sum(1 for c in train_convs if len(c) > args.seq_len + 1)
-    print(f"      {truncated:,} conversations exceed seq_len and will be truncated "
-          f"({truncated / len(train_convs):.1%})")
+    print(f"      {truncated:,} single turns exceed seq_len and will be truncated "
+          f"({truncated / len(train_convs):.2%})")
 
     manifest_path = out_dir / "run.json"
     if not manifest_path.exists():

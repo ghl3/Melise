@@ -22,7 +22,7 @@ from pathlib import Path
 
 import torch
 
-from .chat import assistant_mask, split_conversations
+from .chat import assemble, assistant_mask, parse_turns, split_conversations
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -166,15 +166,51 @@ def load_data_mix(mix_path):
 # ---------- Conversations (SFT) ----------
 
 
-def load_conversations(paths, seed: int, val_frac: float):
-    """Read chat corpora, split into conversations, and carve off a
-    deterministic validation set. The shuffle uses its own RNG seeded by
-    `seed`, so resumes see the identical train/val split."""
+def split_conversation(conv: bytes, max_bytes: int) -> list[bytes]:
+    """Split one conversation at turn boundaries into chunks whose
+    encoded size fits max_bytes.
+
+    SFT truncates each example to seq_len+1 bytes, so without splitting,
+    everything past the cap in a long conversation is silently wasted
+    (~89% of the SmolTalk mix exceeds 512 bytes). Chunks keep whole
+    turns; a chunk must contain an assistant turn to be a training
+    example (user-only tails are dropped). A single turn longer than
+    max_bytes stays alone and is truncated downstream, as before."""
+    if len(conv) <= max_bytes:
+        return [conv]
+    turns = parse_turns(conv)
+    chunks: list[bytes] = []
+    cur: list[tuple[str, bytes]] = []
+    cur_len = 1  # END_CONV
+
+    def flush():
+        if any(role == "assistant" for role, _ in cur):
+            chunks.append(assemble(cur))
+
+    for role, content in turns:
+        turn_len = len(content) + 2  # role marker + END_TURN
+        if cur and cur_len + turn_len > max_bytes:
+            flush()
+            cur, cur_len = [], 1
+        cur.append((role, content))
+        cur_len += turn_len
+    flush()
+    return chunks or [conv]
+
+
+def load_conversations(paths, seed: int, val_frac: float, seq_len: int | None = None):
+    """Read chat corpora, split into conversations (further split at turn
+    boundaries to fit seq_len when given), and carve off a deterministic
+    validation set. The shuffle uses its own RNG seeded by `seed`, so
+    resumes see the identical train/val split."""
     convs = []
     for path in paths:
         if not path.exists():
             raise SystemExit(f"{path} not found — run scripts/prep_chat_data.py")
-        convs.extend(split_conversations(path.read_bytes()))
+        cs = split_conversations(path.read_bytes())
+        if seq_len is not None:
+            cs = [chunk for c in cs for chunk in split_conversation(c, seq_len + 1)]
+        convs.extend(cs)
     random.Random(seed).shuffle(convs)
     n_val = max(int(len(convs) * val_frac), 64)
     return convs[n_val:], convs[:n_val]

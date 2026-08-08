@@ -128,7 +128,10 @@ def parse_args() -> argparse.Namespace:
         help="Total training steps (target — counts steps from any resumed checkpoint)",
     )
     g.add_argument("--batch-size", type=int, default=16)
-    g.add_argument("--seq-len", type=int, default=512, help="Sequence length per batch")
+    g.add_argument("--seq-len", type=int, default=2048,
+                   help="Sequence length per batch. 2048 is the next-gen "
+                   "default (2026-08-08): KDA layers are O(L), so on CUDA "
+                   "long windows are cheap; only the MLA quarter pays O(L²)")
     g.add_argument("--lr", type=float, default=3e-4, help="Peak learning rate")
     g.add_argument(
         "--lr-schedule",

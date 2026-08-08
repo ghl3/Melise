@@ -85,6 +85,37 @@ def assistant_mask(conv: bytes) -> list[bool]:
     return mask
 
 
+def parse_turns(conv: bytes) -> list[tuple[str, bytes]]:
+    """Inverse of encode_conversation: [(role, content bytes), ...].
+    Stops at END_CONV; bytes outside a marker...END_TURN span are ignored."""
+    turns = []
+    role, buf = None, bytearray()
+    for b in conv:
+        if b in (USER, ASSISTANT):
+            role, buf = ("user" if b == USER else "assistant"), bytearray()
+        elif b == END_TURN:
+            if role is not None:
+                turns.append((role, bytes(buf)))
+            role = None
+        elif b == END_CONV:
+            break
+        elif role is not None:
+            buf.append(b)
+    return turns
+
+
+def assemble(turns: list[tuple[str, bytes]]) -> bytes:
+    """encode_conversation for content that is already bytes (no
+    sanitization — used to reassemble parsed turns)."""
+    out = bytearray()
+    for role, content in turns:
+        out.append(USER if role == "user" else ASSISTANT)
+        out += content
+        out.append(END_TURN)
+    out.append(END_CONV)
+    return bytes(out)
+
+
 def completion_text(raw: bytes) -> str:
     """Decode a generated assistant completion: cut at the stop byte,
     drop any stray markers, decode utf-8 leniently."""
