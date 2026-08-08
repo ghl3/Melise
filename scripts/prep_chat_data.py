@@ -46,7 +46,7 @@ SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from chat_format import END_CONV, encode_conversation, split_conversations
+from transformer.chat import END_CONV, encode_conversation, split_conversations
 
 HF = "https://huggingface.co"
 DOLLY_URL = f"{HF}/datasets/databricks/databricks-dolly-15k/resolve/main/databricks-dolly-15k.jsonl"

@@ -1,4 +1,4 @@
-"""Byte-level chat template shared by prep_chat_data.py, sft.py, grpo.py.
+"""Byte-level chat template (used by SFT, RL rollouts, and data prep).
 
 Byte models have no tokenizer and no spare vocab slots (all 256 byte
 values are real data), so role markers are ASCII control bytes that are

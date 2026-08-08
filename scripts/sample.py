@@ -17,7 +17,7 @@ Examples:
     Temperature sampling instead of greedy:
         .venv/bin/python scripts/sample.py --temperature 0.8
 
-Loads a checkpoint saved by `scripts/train.py` (which embeds the Config so
+Loads a checkpoint saved by any stage script (which embeds the Config so
 we know how to reconstruct the model). Greedy by default; temperature > 0
 enables stochastic sampling.
 """
@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--checkpoint", type=Path,
                    default=PROJECT_ROOT / "checkpoints" / "latest.pt",
-                   help="Path to a checkpoint saved by scripts/train.py")
+                   help="Path to a checkpoint saved by pretrain.py/sft.py/grpo.py")
     p.add_argument("--prompt", type=str, default="ROMEO:\\n",
                    help="Prefix text. Backslash escapes (\\n, \\t) are interpreted")
     p.add_argument("--tokens", type=int, default=300,

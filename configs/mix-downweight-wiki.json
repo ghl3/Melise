@@ -1,5 +1,6 @@
 {
   "include": "data/*.txt",
+  "exclude": "data/chat_*.txt",
   "multipliers": {
     "data/wikitext103_train.txt": 0.1,
     "data/enwik8.txt": 0.1,

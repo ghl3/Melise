@@ -12,10 +12,15 @@ A component library plus explicit model definitions:
                 explicitly: base (GQA + MoE), vanilla (MHA + dense),
                 deepseek (MLA + DeepSeekMoE), kimi3 (KDA/MLA hybrid +
                 AttnRes + LatentMoE)
+    chat.py     byte-level chat template (control-byte role markers)
+    data.py     corpus/mixture loading, window + conversation batching
+    eval.py     exact slice bpb, sampled val loss, masked chat loss
+    rl/         RLVR: verifiable tasks, rollouts, GRPO math
 
 Every model exposes the same interface: `forward(token_ids, kv_cache)`,
 `new_cache(batch_size, device)`, `num_parameters()`, and `.cfg` — so
-generate() and the training script work with all of them.
+generate() and the stage scripts (pretrain/sft/grpo) work with all of
+them.
 
 Quick start:
 

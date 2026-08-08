@@ -54,22 +54,33 @@ Models (see `transformer/models/`, one self-documenting file each):
 | `deepseek` | DeepSeek-V3 in miniature: MLA + sigmoid-routed MoE, first layer dense   |
 | `kimi3`    | Kimi K3 in miniature (arXiv:2607.24653): 3:1 KDA/Gated-MLA hybrid, NoPE, Attention Residuals, Stable LatentMoE, SiTU-GLU |
 
-## Training and sampling
+## Training
+
+Three stages, each a thin script over the transformer package; run dirs
+live at `checkpoints/<stage>/<run>` and mirror to
+`gs://<bucket>/runs/<stage>/<run>`:
 
 ```bash
-# Train (checkpoints/, metrics, auto-named run dirs — see scripts/train.py -h)
-.venv/bin/python scripts/train.py --steps 5000
-.venv/bin/python scripts/train.py --preset kimi3 --seq-len 256 --steps 5000
+# 1. Pretrain (next-byte LM on the corpus mixture; sampling weight =
+#    byte size × per-file multiplier; see configs/mix-downweight-wiki.json)
+.venv/bin/python scripts/pretrain.py --preset kimi3 --seq-len 256 \
+    --data-mix configs/mix-downweight-wiki.json --steps 5000
 
-# Sample from the latest checkpoint (architecture is recovered from the checkpoint)
-.venv/bin/python scripts/sample.py --checkpoint checkpoints/<run>/latest.pt --temperature 0.8
+# 2. SFT (assistant-masked loss on byte-template chat data; build the data
+#    with scripts/prep_chat_data.py + scripts/gen_task_sft.py)
+.venv/bin/python scripts/sft.py --init checkpoints/pretrain/<run>/best.pt --steps 3000
 
-# Train on the whole data/ directory with a mixture config (sampling weight =
-# byte size × per-file multiplier; see configs/mix-downweight-wiki.json)
-.venv/bin/python scripts/train.py --data-mix configs/mix-downweight-wiki.json --steps 5000
+# 3. GRPO on verifiable rewards (transformer/rl/ — tasks, rollouts, loss)
+.venv/bin/python scripts/grpo.py --init checkpoints/sft/<run>/best.pt --steps 200
 
-# Watch a run live (loss/bpb, LR, grad norm, val, per-layer MoE expert load, samples)
-.venv/bin/tensorboard --logdir checkpoints/<run>/tb
+# Sample from any checkpoint (architecture is recovered from the checkpoint)
+.venv/bin/python scripts/sample.py --checkpoint checkpoints/<stage>/<run>/latest.pt --temperature 0.8
+
+# Exact bpb on the reserved enwik8 test slice for every best.pt
+.venv/bin/python scripts/eval_checkpoint.py
+
+# Watch all runs live, grouped by stage (loss/bpb, val, MoE load, RL reward…)
+.venv/bin/tensorboard --logdir checkpoints
 ```
 
 Training is exactly resumable: checkpoints embed the model config, optimizer
@@ -77,9 +88,10 @@ state, RNG streams, best-val tracking, and token count, and are written
 atomically — `--resume <ckpt>` continues the identical run (Ctrl-C saves an
 `interrupted.pt` first).
 
-Note: the kimi3 preset's KDA layers run a reference sequential scan (the
-chunkwise kernel from the paper is not implemented), so training speed drops
-with `--seq-len`; 128–256 is comfortable on MPS.
+Note: the kimi3 preset's KDA layers use fla's chunkwise Triton kernel on
+CUDA and fall back to a reference sequential scan elsewhere (MPS/CPU), so
+non-CUDA training speed drops with `--seq-len`; 128–256 is comfortable on
+MPS. Real SFT/GRPO runs belong on the CUDA VM.
 
 ## Tests
 

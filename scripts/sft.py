@@ -1,18 +1,18 @@
-"""Supervised fine-tuning on byte-level chat data (stage 1 of post-training).
+"""Supervised fine-tuning on byte-level chat data (stage 2 of 3).
 
 Examples:
 
     Fine-tune the Chinchilla small run on the chat mix at seq 1024:
         .venv/bin/python scripts/sft.py \\
-            --init checkpoints/kimi3-small-17M-scarlet-harbor-20260808-010540/best.pt \\
+            --init checkpoints/pretrain/kimi3-small-17M-scarlet-harbor-*/best.pt \\
             --steps 3000
 
     Resume an SFT run:
-        .venv/bin/python scripts/sft.py --resume checkpoints/sft-.../latest.pt --steps 5000
+        .venv/bin/python scripts/sft.py --resume checkpoints/sft/<run>/latest.pt --steps 5000
 
-Trains on conversations in the byte chat template (chat_format.py) from
-data/chat_*.txt (build those with scripts/prep_chat_data.py). Differences
-from pre-training (train.py):
+Trains on conversations in the byte chat template (transformer.chat)
+from data/chat_*.txt (build those with scripts/prep_chat_data.py and
+scripts/gen_task_sft.py). Differences from pre-training (pretrain.py):
 
   - Examples are whole conversations (one per row, padded/truncated to
     --seq-len), not random windows of a byte stream.
@@ -23,10 +23,11 @@ from pre-training (train.py):
     NoPE/KDA so length extension is clean. RoPE models (base/vanilla)
     get freshly sized tables — expect some extrapolation cost.
 
-Checkpoints use the same payload as train.py, so sample.py,
-eval_checkpoint.py, and grpo.py --init all load them unchanged. Run dirs
-follow the same layout (run.json, metrics.jsonl, tb/, bucket sync) with
-names prefixed "sft-".
+Run dirs live at checkpoints/sft/sft-<name> and mirror to
+gs://<bucket>/runs/sft/<name>; TensorBoard at --logdir checkpoints
+groups runs by stage. Checkpoints use the same payload as pretrain.py,
+so sample.py, eval_checkpoint.py, and grpo.py --init all load them
+unchanged.
 
 Reported bpb is bits per *assistant* byte (masked positions only), so it
 is not comparable to pre-training bpb on enwik8.
@@ -36,7 +37,6 @@ import argparse
 import dataclasses
 import json
 import math
-import random
 import signal
 import sys
 import time
@@ -50,9 +50,11 @@ import torch
 import torch.nn.functional as F
 
 from transformer import build_model, generate
+from transformer.chat import completion_text, make_prompt
+from transformer.data import conversation_batch, load_conversations
+from transformer.eval import masked_conversation_loss
 
-from chat_format import assistant_mask, completion_text, make_prompt, split_conversations
-from train import (
+from run_utils import (
     BucketSync,
     MoEMonitor,
     Tee,
@@ -86,7 +88,7 @@ def parse_args() -> argparse.Namespace:
     )
     g = p.add_argument_group("model")
     g.add_argument("--init", type=Path, default=None,
-                   help="Base checkpoint to fine-tune (e.g. a train.py best.pt)")
+                   help="Base checkpoint to fine-tune (a pretrain.py best.pt)")
     g.add_argument("--resume", type=Path, default=None,
                    help="SFT checkpoint to resume (continues its run dir)")
     g.add_argument("--seq-len", type=int, default=1024,
@@ -129,64 +131,9 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-# ---------- Data ----------
-
-
-def load_conversations(paths: list[Path], seed: int, val_frac: float):
-    """Read chat corpora, split into conversations, and carve off a
-    deterministic validation set. The shuffle uses its own RNG seeded by
-    --seed, so resumes see the identical train/val split."""
-    convs = []
-    for path in paths:
-        if not path.exists():
-            raise SystemExit(f"{path} not found — run scripts/prep_chat_data.py")
-        convs.extend(split_conversations(path.read_bytes()))
-    random.Random(seed).shuffle(convs)
-    n_val = max(int(len(convs) * val_frac), 64)
-    return convs[n_val:], convs[:n_val]
-
-
-def batch_from(convs: list[bytes], idx: list[int], seq_len: int,
-               device: torch.device):
-    """Tensorize conversations: inputs (B, L) int64, targets (B, L) int64,
-    mask (B, L) bool marking positions whose *target* is an assistant byte.
-    Conversations are truncated to seq_len+1 bytes and padded with 0x00
-    (pad positions are masked out, so the pad byte is never a target)."""
-    B, L = len(idx), seq_len
-    tokens = torch.zeros((B, L + 1), dtype=torch.uint8)
-    mask = torch.zeros((B, L), dtype=torch.bool)
-    for row, i in enumerate(idx):
-        conv = convs[i][: L + 1]
-        tokens[row, : len(conv)] = torch.frombuffer(bytearray(conv), dtype=torch.uint8)
-        amask = assistant_mask(conv)
-        for t in range(len(conv) - 1):
-            mask[row, t] = amask[t + 1]
-    tokens = tokens.long().to(device)
-    return tokens[:, :-1], tokens[:, 1:], mask.to(device)
-
-
-@torch.no_grad()
-def eval_masked_loss(model, val_convs, batch_size, seq_len, n_batches, device):
-    """Deterministic masked loss over a fixed prefix of the val set."""
-    model.eval()
-    try:
-        total, count = 0.0, 0
-        for b in range(n_batches):
-            idx = list(range(b * batch_size, min((b + 1) * batch_size, len(val_convs))))
-            if not idx:
-                break
-            inputs, targets, mask = batch_from(val_convs, idx, seq_len, device)
-            logits = model(inputs)
-            nll = F.cross_entropy(logits[mask], targets[mask], reduction="sum")
-            total += float(nll.item())
-            count += int(mask.sum().item())
-        return total / max(count, 1)
-    finally:
-        model.train()
-
-
 @torch.no_grad()
 def sample_chat(model, device, user_text: str, max_new: int = 128) -> str:
+    was_training = model.training
     model.eval()
     try:
         prompt = make_prompt(user_text)
@@ -194,10 +141,8 @@ def sample_chat(model, device, user_text: str, max_new: int = 128) -> str:
         out = generate(model, ids, max_new_tokens=max_new)
         return completion_text(bytes(b & 0xFF for b in out))
     finally:
-        model.train()
-
-
-# ---------- Main ----------
+        if was_training:
+            model.train()
 
 
 def main() -> None:
@@ -224,7 +169,7 @@ def main() -> None:
         out_dir = args.resume.parent.resolve()
     else:
         name = args.run_name or f"sft-{generate_run_name(preset, model.num_parameters())}"
-        out_dir = (PROJECT_ROOT / "checkpoints" / name).resolve()
+        out_dir = (PROJECT_ROOT / "checkpoints" / "sft" / name).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     log_file = open(out_dir / "train.log", "a", buffering=1)
@@ -287,7 +232,7 @@ def main() -> None:
         writer = SummaryWriter(log_dir=str(out_dir / "tb"))
 
     monitor = MoEMonitor(model)
-    sync = BucketSync(out_dir, enabled=not args.no_bucket_sync)
+    sync = BucketSync(out_dir, enabled=not args.no_bucket_sync, stage="sft")
     print(f"bucket sync: {sync.dest or 'off'}")
     print(f"training from step {start_step + 1} to {args.steps} "
           f"(batch={args.batch_size}, seq_len={args.seq_len}, lr={args.lr})\n")
@@ -323,7 +268,8 @@ def main() -> None:
             monitor.enabled = is_log_step
 
             idx = torch.randint(0, len(train_convs), (args.batch_size,)).tolist()
-            inputs, targets, mask = batch_from(train_convs, idx, args.seq_len, device)
+            inputs, targets, mask = conversation_batch(
+                train_convs, idx, args.seq_len, device)
             logits = model(inputs)
             loss = F.cross_entropy(logits[mask], targets[mask])
 
@@ -354,8 +300,8 @@ def main() -> None:
                     writer.add_scalar("train/grad_norm", float(grad_norm.item()), step)
 
             if step % args.eval_every == 0:
-                val = eval_masked_loss(model, val_convs, args.batch_size,
-                                       args.seq_len, args.eval_batches, device)
+                val = masked_conversation_loss(model, val_convs, args.batch_size,
+                                               args.seq_len, args.eval_batches, device)
                 is_best = val < best_val
                 if is_best:
                     best_val, best_step = val, step

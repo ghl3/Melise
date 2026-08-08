@@ -1,26 +1,28 @@
-"""Train a model preset on a byte-level text corpus.
+"""Pre-train a model preset on byte-level text corpora (stage 1 of 3).
 
 Examples:
 
-    First run (auto-generated run name in checkpoints/):
-        .venv/bin/python scripts/train.py --steps 500
+    First run (auto-generated run name in checkpoints/pretrain/):
+        .venv/bin/python scripts/pretrain.py --steps 500
 
-    Train the Kimi K3 miniature (KDA runs a sequential scan — prefer a
-    modest --seq-len):
-        .venv/bin/python scripts/train.py --preset kimi3 --seq-len 256 --steps 2000
+    Train the Kimi K3 miniature (KDA runs a sequential scan on non-CUDA —
+    prefer a modest --seq-len):
+        .venv/bin/python scripts/pretrain.py --preset kimi3 --seq-len 256 --steps 2000
 
-    Custom run name:
-        .venv/bin/python scripts/train.py --run-name my-experiment --steps 5000
+    The full mixture with reserved splits:
+        .venv/bin/python scripts/pretrain.py --data-mix configs/mix-downweight-wiki.json
 
     Resume training (uses the same directory; model, optimizer, RNG
     streams, and best-val tracking all continue where they left off):
-        .venv/bin/python scripts/train.py \\
-            --resume checkpoints/calm-river-20260503-141522/latest.pt --steps 10000
+        .venv/bin/python scripts/pretrain.py \\
+            --resume checkpoints/pretrain/<run>/latest.pt --steps 10000
 
-    Watch a run in TensorBoard:
-        .venv/bin/tensorboard --logdir checkpoints/<run>/tb
+    Watch runs in TensorBoard (stages group as pretrain/ sft/ rlvr/):
+        .venv/bin/tensorboard --logdir checkpoints
 
-Each run writes to its own subdirectory under checkpoints/ containing:
+Stages: pretrain (this script) → sft.py → grpo.py. Run dirs live at
+checkpoints/pretrain/<run-name> and mirror to
+gs://<bucket>/runs/pretrain/<run-name>; each contains:
 
     step_NNNN.pt    rolling checkpoints (oldest pruned to --keep-last)
     latest.pt       symlink to most recent
@@ -56,10 +58,7 @@ at inference time. Run from the project root.
 import argparse
 import json
 import math
-import random
-import shutil
 import signal
-import subprocess
 import sys
 import time
 from dataclasses import asdict, is_dataclass
@@ -74,7 +73,26 @@ import torch
 import torch.nn.functional as F
 
 from transformer import MODELS, build_model, generate
-from transformer.ffn import DeepSeekMoE, MoE, StableLatentMoE
+from transformer.data import get_batch, load_data, load_data_mix, parse_weights
+from transformer.eval import sampled_val_loss
+
+from run_utils import (
+    BucketSync,
+    MoEMonitor,
+    Tee,
+    device_mem_gb,
+    emit,
+    fmt_eta,
+    generate_run_name,
+    global_param_norm,
+    lr_at,
+    open_metrics_log,
+    prune_old_checkpoints,
+    recover_best_from_metrics,
+    restore_rng_state,
+    save_checkpoint,
+    update_symlink,
+)
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -82,122 +100,6 @@ except ImportError:  # tensorboard not installed — script still works
     SummaryWriter = None
 
 LN2 = math.log(2.0)
-
-# ---------- Auto-naming ----------
-
-_ADJECTIVES = [
-    "calm",
-    "wild",
-    "swift",
-    "bright",
-    "silver",
-    "golden",
-    "stormy",
-    "gentle",
-    "crisp",
-    "frozen",
-    "scarlet",
-    "dusky",
-    "frosty",
-    "sunny",
-    "quiet",
-    "fierce",
-    "eager",
-    "jolly",
-    "hidden",
-    "crystal",
-    "crimson",
-    "ember",
-    "azure",
-    "twilight",
-    "rugged",
-]
-_NOUNS = [
-    "river",
-    "mountain",
-    "valley",
-    "harbor",
-    "glacier",
-    "cypress",
-    "sparrow",
-    "otter",
-    "wolf",
-    "falcon",
-    "brook",
-    "meadow",
-    "canyon",
-    "lighthouse",
-    "garden",
-    "forest",
-    "owl",
-    "comet",
-    "nova",
-    "dawn",
-    "willow",
-    "raven",
-    "tide",
-    "summit",
-    "dell",
-]
-
-
-def fmt_params(n: int) -> str:
-    """17,234,567 → '17M'; 1,234,567,890 → '1.2B'."""
-    if n >= 1e9:
-        return f"{n / 1e9:.1f}B"
-    return f"{round(n / 1e6)}M"
-
-
-def generate_run_name(preset: str, n_params: int) -> str:
-    """Return e.g. 'kimi3-medium-66M-calm-river-20260503-141522'.
-
-    The name leads with the architecture preset and parameter count so
-    checkpoint directories (and TensorBoard run labels) identify the
-    model at a glance. Uses a separate time-seeded RNG so the chosen name
-    is independent of --seed (otherwise two default-seed runs started in
-    the same second would collide).
-    """
-    rng = random.Random()  # seeded from os.urandom
-    adj = rng.choice(_ADJECTIVES)
-    noun = rng.choice(_NOUNS)
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{preset}-{fmt_params(n_params)}-{adj}-{noun}-{ts}"
-
-
-# ---------- Tee writer (stdout -> console + file) ----------
-
-
-class Tee:
-    """File-like object that writes to multiple streams."""
-
-    def __init__(self, *streams):
-        self.streams = streams
-
-    def write(self, data):
-        for s in self.streams:
-            s.write(data)
-            s.flush()
-        return len(data)
-
-    def flush(self):
-        for s in self.streams:
-            s.flush()
-
-
-# ---------- ETA formatting ----------
-
-
-def fmt_eta(seconds: float) -> str:
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    if seconds < 3600:
-        return f"{seconds / 60:.0f}m"
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) / 60)
-    return f"{h}h{m:02d}m"
-
-
-# ---------- CLI ----------
 
 
 def parse_args() -> argparse.Namespace:
@@ -280,7 +182,7 @@ def parse_args() -> argparse.Namespace:
         "--no-bucket-sync",
         action="store_true",
         help="Don't mirror the run dir (checkpoints, tb, metrics, logs) to "
-        "gs://<bucket>/runs/<run-name>. Sync is on by default whenever "
+        "gs://<bucket>/runs/pretrain/<run-name>. Sync is on by default whenever "
         "configs/gcs.json exists and gcloud is on PATH.",
     )
 
@@ -290,13 +192,13 @@ def parse_args() -> argparse.Namespace:
         "--out",
         type=Path,
         default=None,
-        help="Run output directory. Default: checkpoints/{run-name}/",
+        help="Run output directory. Default: checkpoints/pretrain/{run-name}/",
     )
     g.add_argument(
         "--run-name",
         type=str,
         default=None,
-        help="Auto-generated if omitted (e.g. 'calm-river-20260503-141522')",
+        help="Auto-generated if omitted (e.g. 'kimi3-small-17M-calm-river-20260503-141522')",
     )
     g.add_argument(
         "--resume",
@@ -331,9 +233,9 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="JSON mixture config: {\"include\": <glob or list of globs>, "
-        "\"multipliers\": {<path or filename>: <mult>, ...}}. Sampling weight "
-        "is byte_size × multiplier (default multiplier 1.0, i.e. naive "
-        "byte-size weighting). Mutually exclusive with --data/--data-weights.",
+        "\"exclude\": <glob(s)>, \"multipliers\": {<path or filename>: <mult>}, "
+        "\"splits\": {...}}. Sampling weight is byte_size × multiplier. "
+        "Mutually exclusive with --data/--data-weights.",
     )
     g.add_argument(
         "--val-frac",
@@ -358,323 +260,7 @@ def resolve_run_dir(args: argparse.Namespace, preset: str, n_params: int) -> Pat
     if args.resume is not None:
         return args.resume.parent.resolve()
     name = args.run_name or generate_run_name(preset, n_params)
-    return (PROJECT_ROOT / "checkpoints" / name).resolve()
-
-
-# ---------- LR schedule ----------
-
-
-def lr_at(step: int, args: argparse.Namespace) -> float:
-    """Learning rate for a (1-indexed) step. Pure function of step, so a
-    resumed run lands on exactly the same schedule."""
-    if args.lr_schedule == "constant":
-        return args.lr
-    warmup = max(int(args.warmup_frac * args.steps), 1)
-    min_lr = args.min_lr_frac * args.lr
-    if step <= warmup:
-        return args.lr * step / warmup
-    t = min((step - warmup) / max(args.steps - warmup, 1), 1.0)
-    return min_lr + 0.5 * (args.lr - min_lr) * (1.0 + math.cos(math.pi * t))
-
-
-# ---------- RNG state (for exact resume) ----------
-
-
-def rng_state(device: torch.device) -> dict:
-    """Snapshot every RNG stream training draws from: CPU (mixture-dataset
-    multinomial) and the device generator (batch start offsets on MPS/CUDA)."""
-    state = {"cpu": torch.get_rng_state()}
-    if device.type == "mps":
-        state["mps"] = torch.mps.get_rng_state()
-    elif device.type == "cuda":
-        state["cuda"] = torch.cuda.get_rng_state(device)
-    return state
-
-
-def restore_rng_state(state: dict | None, device: torch.device) -> bool:
-    if not state:
-        return False
-    try:
-        torch.set_rng_state(state["cpu"])
-        if device.type == "mps" and "mps" in state:
-            torch.mps.set_rng_state(state["mps"])
-        elif device.type == "cuda" and "cuda" in state:
-            torch.cuda.set_rng_state(state["cuda"], device)
-        return True
-    except Exception as e:  # torch-version mismatch etc. — not fatal
-        print(f"  (could not restore RNG state: {e}; batch stream restarts from --seed)")
-        return False
-
-
-# ---------- Data ----------
-
-
-def load_data(paths, device, splits):
-    """Load each corpus as a uint8 tensor (1 byte per token). Batches are
-    cast to int64 on the fly in get_batch — storing the corpora themselves
-    as int64 would be 8× the memory (WikiText-103 alone would be ~4.3 GB).
-
-    `splits` maps path → (train_frac, val_frac). Files without an entry
-    train on 100% of their bytes and contribute nothing to validation.
-    Any remainder after train+val (e.g. enwik8's canonical last-5% test
-    split) is NEVER loaded here — it stays untouched for offline evals.
-    """
-    train_list, byte_counts = [], []
-    val_list, val_bytes = [], []
-    for path in paths:
-        if not path.exists():
-            raise FileNotFoundError(
-                f"{path} not found. Run scripts/download_data.py first."
-            )
-        raw = path.read_bytes()
-        data = torch.frombuffer(bytearray(raw), dtype=torch.uint8).to(device)
-        train_frac, val_frac = splits.get(path, (1.0, 0.0))
-        n = data.shape[0]
-        train_end = int(n * train_frac)
-        val_end = train_end + int(n * val_frac)
-        train_list.append(data[:train_end])
-        if val_end > train_end:
-            val_list.append(data[train_end:val_end])
-            val_bytes.append(val_end - train_end)
-        byte_counts.append(len(raw))
-    return train_list, val_list, val_bytes, byte_counts
-
-
-def get_batch(datasets, weights, batch_size, seq_len):
-    if len(datasets) == 1:
-        d = datasets[0]
-        starts = torch.randint(
-            0, d.shape[0] - seq_len - 1, (batch_size,), device=d.device
-        )
-        inputs = torch.stack([d[s : s + seq_len] for s in starts])
-        targets = torch.stack([d[s + 1 : s + 1 + seq_len] for s in starts])
-        return inputs.long(), targets.long()
-
-    chosen = torch.multinomial(weights, batch_size, replacement=True).tolist()
-    inputs, targets = [], []
-    for d_idx in chosen:
-        d = datasets[d_idx]
-        s = int(torch.randint(0, d.shape[0] - seq_len - 1, (1,)).item())
-        inputs.append(d[s : s + seq_len])
-        targets.append(d[s + 1 : s + 1 + seq_len])
-    return torch.stack(inputs).long(), torch.stack(targets).long()
-
-
-def parse_weights(weights_str, byte_counts):
-    if weights_str is None:
-        return torch.tensor([float(b) for b in byte_counts])
-    weights = [float(w) for w in weights_str.split(",")]
-    if len(weights) != len(byte_counts):
-        raise SystemExit(
-            f"--data-weights has {len(weights)} entries; --data has {len(byte_counts)}."
-        )
-    return torch.tensor(weights)
-
-
-def load_data_mix(mix_path):
-    """Read a mixture config: which files to train on, per-file
-    sampling-weight multipliers, and per-file train/val/test splits.
-
-        {"include": "data/*.txt",                     # glob or list of globs
-         "multipliers": {"data/enwik8.txt": 0.1},     # default 1.0
-         "splits": {                                  # default: 100% train
-            "data/enwik8.txt": {"train": 0.90, "val": 0.05, "test": 0.05}}}
-
-    Files without a "splits" entry train on all of their bytes. The test
-    fraction is reserved — train.py never loads it (offline evals do).
-
-    Returns (paths, multipliers, splits) with multipliers aligned to
-    paths and splits keyed by path. Keys may be project-relative paths or
-    bare filenames.
-    """
-    mix = json.loads(mix_path.read_text())
-    includes = mix.get("include", "data/*.txt")
-    if isinstance(includes, str):
-        includes = [includes]
-    paths = sorted({p for g in includes for p in PROJECT_ROOT.glob(g)})
-    if not paths:
-        raise SystemExit(f"--data-mix: include patterns {includes} matched no files")
-
-    def match(table, matched):
-        """Look up a per-file entry by relative path or filename."""
-        def lookup(p):
-            rel = str(p.relative_to(PROJECT_ROOT))
-            for key in (rel, p.name):
-                if key in table:
-                    matched.add(key)
-                    return table[key]
-            return None
-        return lookup
-
-    raw_mults = dict(mix.get("multipliers", {}))
-    raw_splits = dict(mix.get("splits", {}))
-    matched = set()
-    mult_of = match(raw_mults, matched)
-    split_of = match(raw_splits, matched)
-
-    mults, splits = [], {}
-    for p in paths:
-        m = mult_of(p)
-        mults.append(1.0 if m is None else float(m))
-        s = split_of(p)
-        if s is not None:
-            train, val = float(s.get("train", 1.0)), float(s.get("val", 0.0))
-            test = float(s.get("test", 0.0))
-            if train + val + test > 1.0 + 1e-9:
-                raise SystemExit(f"--data-mix: splits for {p.name} sum to > 1")
-            splits[p] = (train, val)
-
-    unmatched = (set(raw_mults) | set(raw_splits)) - matched
-    if unmatched:
-        raise SystemExit(
-            f"--data-mix: keys match no included file: {sorted(unmatched)}"
-        )
-    return paths, mults, splits
-
-
-# ---------- Bucket sync ----------
-
-
-class BucketSync:
-    """Mirror the run dir to gs://<bucket>/runs/<run-name> as training goes.
-
-    The bucket is the canonical home of runs: checkpoints, TensorBoard
-    events, metrics.jsonl, train.log all survive the VM, and any
-    TensorBoard host can pull every machine's runs into one view.
-
-    kick() launches a detached `gcloud storage rsync` (training never
-    blocks on uploads; if the previous sync is still running it's skipped
-    — the next kick catches up). Deletions are mirrored so --keep-last
-    pruning applies in the bucket too. finalize() runs one last blocking
-    sync so the final checkpoint always lands.
-
-    latest.pt is excluded: it's a symlink to a step file whose bytes are
-    already uploaded, and rsync would re-upload the full copy each save.
-    """
-
-    def __init__(self, out_dir: Path, enabled: bool):
-        self.out_dir = out_dir
-        self.dest = None
-        self.proc = None
-        gcs_config = PROJECT_ROOT / "configs" / "gcs.json"
-        if enabled and gcs_config.exists() and shutil.which("gcloud"):
-            cfg = json.loads(gcs_config.read_text())
-            self.dest = f"gs://{cfg['bucket']}/runs/{out_dir.name}"
-
-    def _cmd(self) -> list[str]:
-        return [
-            "gcloud", "storage", "rsync", "-r",
-            "--delete-unmatched-destination-objects",
-            "-x", r"^latest\.pt$|.*\.tmp$",
-            str(self.out_dir), self.dest,
-        ]
-
-    def kick(self) -> None:
-        if self.dest is None:
-            return
-        if self.proc is not None and self.proc.poll() is None:
-            return  # previous sync still uploading; next kick catches up
-        self.proc = subprocess.Popen(
-            self._cmd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-
-    def finalize(self) -> None:
-        if self.dest is None:
-            return
-        if self.proc is not None:
-            self.proc.wait()
-        subprocess.run(self._cmd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-# ---------- MoE routing monitor ----------
-
-
-class MoEMonitor:
-    """Watch expert load balance without touching the model code.
-
-    Registers a forward-pre-hook on every MoE layer. The hooks are inert
-    except on logging steps, when each one re-runs the layer's (tiny)
-    router on the incoming activations and records per-expert load
-    fractions. Cheap — one d×E matmul per MoE layer per logged step.
-
-    Reported per layer:
-        max_load  — worst expert's share of routings (1/E is perfectly
-                    balanced; ~1.0 means router collapse)
-        entropy   — routing entropy normalized to [0, 1] (1 = uniform)
-        bias_span — max−min of the balancing bias, for routers that have
-                    one (DeepSeekMoE sign-update, StableLatentMoE QB)
-    """
-
-    def __init__(self, model: torch.nn.Module):
-        self.enabled = False
-        self.loads: dict[str, torch.Tensor] = {}
-        self.bias_spans: dict[str, float] = {}
-        self.names: list[str] = []
-        for path, mod in model.named_modules():
-            if isinstance(mod, (MoE, DeepSeekMoE, StableLatentMoE)):
-                name = f"L{len(self.names)}"
-                self.names.append(name)
-                mod.register_forward_pre_hook(self._make_hook(name))
-
-    def _make_hook(self, name: str):
-        def hook(module, inputs):
-            if not self.enabled:
-                return
-            with torch.no_grad():
-                x = inputs[0].reshape(-1, inputs[0].shape[-1])
-                if isinstance(module, MoE):
-                    scores = module.router(x).float()
-                    idx = scores.topk(module.top_k, dim=-1).indices
-                else:  # sigmoid routers select through their balancing bias
-                    scores = torch.sigmoid(module.router(x).float())
-                    idx = (scores + module.route_bias).topk(module.top_k, dim=-1).indices
-                n_experts = module.router.out_features
-                counts = torch.bincount(idx.reshape(-1), minlength=n_experts).float()
-                self.loads[name] = (counts / counts.sum()).cpu()
-                if hasattr(module, "route_bias"):
-                    b = module.route_bias
-                    self.bias_spans[name] = float((b.max() - b.min()).item())
-
-        return hook
-
-    def summary(self) -> dict:
-        """Aggregates for metrics.jsonl (per-layer detail goes to TensorBoard)."""
-        if not self.loads:
-            return {}
-        max_loads = [float(l.max()) for l in self.loads.values()]
-        entropies = [self.entropy(l) for l in self.loads.values()]
-        return {
-            "moe_max_load": max(max_loads),
-            "moe_mean_entropy": sum(entropies) / len(entropies),
-        }
-
-    @staticmethod
-    def entropy(load: torch.Tensor) -> float:
-        p = load[load > 0]
-        h = -(p * p.log()).sum().item()
-        return h / math.log(len(load)) if len(load) > 1 else 1.0
-
-
-# ---------- Eval & sampling ----------
-
-
-@torch.no_grad()
-def eval_loss(model, val_datasets, weights, batch_size, seq_len, n_batches):
-    was_training = model.training
-    model.eval()
-    try:
-        total = 0.0
-        for _ in range(n_batches):
-            inputs, targets = get_batch(val_datasets, weights, batch_size, seq_len)
-            logits = model(inputs)
-            loss = F.cross_entropy(
-                logits.view(-1, model.cfg.vocab_size), targets.view(-1)
-            )
-            total += loss.item()
-        return total / n_batches
-    finally:
-        if was_training:
-            model.train()
+    return (PROJECT_ROOT / "checkpoints" / "pretrain" / name).resolve()
 
 
 @torch.no_grad()
@@ -692,108 +278,12 @@ def sample_text(model, device, prompt, n_tokens):
             model.train()
 
 
-@torch.no_grad()
-def global_param_norm(model) -> float:
-    total = 0.0
-    for p in model.parameters():
-        total += float(p.detach().float().pow(2).sum().item())
-    return math.sqrt(total)
-
-
-def device_mem_gb(device: torch.device) -> float | None:
-    if device.type == "mps":
-        return torch.mps.current_allocated_memory() / 1e9
-    if device.type == "cuda":
-        return torch.cuda.memory_allocated(device) / 1e9
-    return None
-
-
-# ---------- Checkpointing ----------
-
-
-def save_checkpoint(path, model, optimizer, step, cfg, *, preset, best_val,
-                    best_step, tokens_seen, device):
-    """Atomic write: serialize to a tmp file in the same directory, then
-    rename over the target. A Ctrl-C mid-save can never leave a truncated
-    checkpoint at `path`."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "step": step,
-        "config": cfg,
-        "preset": preset,
-        "best_val": best_val,
-        "best_step": best_step,
-        "tokens_seen": tokens_seen,
-        "rng": rng_state(device),
-        "torch_version": torch.__version__,
-    }
-    tmp = path.with_name(path.name + ".tmp")
-    torch.save(payload, tmp)
-    tmp.replace(path)
-
-
-def update_symlink(out_dir, name, target):
-    """(re)point `out_dir/name` at `target` (relative filename)."""
-    link = out_dir / name
-    if link.is_symlink() or link.exists():
-        link.unlink()
-    link.symlink_to(target.name)
-
-
-def prune_old_checkpoints(out_dir, keep_last):
-    """Delete all but the most recent `keep_last` step_*.pt files.
-
-    `best.pt` is a regular file (not a symlink to a step_*.pt), so pruning
-    step files doesn't risk deleting it.
-    """
-    if keep_last <= 0:
-        return []
-    ckpts = sorted(
-        out_dir.glob("step_*.pt"),
-        key=lambda p: int(p.stem.split("_")[1]),
-    )
-    if len(ckpts) <= keep_last:
-        return []
-    to_delete = ckpts[:-keep_last]
-    for p in to_delete:
-        p.unlink()
-    return to_delete
-
-
-def recover_best_from_metrics(metrics_path):
-    """Scan an existing metrics.jsonl for the best val seen so far.
-
-    Fallback for resuming checkpoints from before best_val was stored in
-    the checkpoint itself. Returns (best_val, best_step) or (inf, None).
-    """
-    best_val = float("inf")
-    best_step = None
-    if not metrics_path.exists():
-        return best_val, best_step
-    with open(metrics_path) as f:
-        for line in f:
-            try:
-                ev = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if ev.get("event") == "eval":
-                v = ev.get("val_loss")
-                if v is not None and v < best_val:
-                    best_val = v
-                    best_step = ev.get("step")
-    return best_val, best_step
-
-
-# ---------- Metrics + run manifest ----------
-
-
 def write_run_manifest(path, args, cfg, preset, n_params, byte_counts, weights):
     """One-shot snapshot of the run setup. Written at start; never updated."""
     manifest = {
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "run_name": path.parent.name,
+        "kind": "pretrain",
         "preset": preset,
         "n_params": n_params,
         "args": {
@@ -809,21 +299,6 @@ def write_run_manifest(path, args, cfg, preset, n_params, byte_counts, weights):
     # cfg.dtype is a torch.dtype; not JSON-serializable. Strip from inner dict.
     manifest["config"].pop("dtype", None)
     path.write_text(json.dumps(manifest, indent=2, default=str))
-
-
-def open_metrics_log(path):
-    """Open the metrics JSONL file in append mode, line-buffered."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return open(path, "a", buffering=1)
-
-
-def emit(metrics_f, **fields):
-    """Append one JSONL event. Always includes a timestamp."""
-    fields.setdefault("time", datetime.now().isoformat(timespec="seconds"))
-    metrics_f.write(json.dumps(fields) + "\n")
-
-
-# ---------- Main ----------
 
 
 def main() -> None:
@@ -985,7 +460,7 @@ def main() -> None:
     if monitor.names:
         print(f"tracking {len(monitor.names)} MoE layers for load balance")
 
-    sync = BucketSync(out_dir, enabled=not args.no_bucket_sync)
+    sync = BucketSync(out_dir, enabled=not args.no_bucket_sync, stage="pretrain")
     print(f"bucket sync: {sync.dest or 'off'}")
 
     print(
@@ -999,6 +474,7 @@ def main() -> None:
         metrics_f,
         event="start",
         step=start_step,
+        kind="pretrain",
         preset=preset,
         n_params=model.num_parameters(),
         total_steps=args.steps,
@@ -1100,7 +576,7 @@ def main() -> None:
                         writer.add_scalar(f"moe/{name}_bias_span", span, step)
 
             if step % args.eval_every == 0 and val_weights is not None:
-                val = eval_loss(
+                val = sampled_val_loss(
                     model,
                     val_data,
                     val_weights,

@@ -1,50 +1,41 @@
-"""GRPO on verifiable rewards (stage 2 of post-training, after sft.py).
+"""GRPO on verifiable rewards (stage 3 of 3, after sft.py).
 
 Examples:
 
     Train an SFT checkpoint against all reward tasks:
         .venv/bin/python scripts/grpo.py \\
-            --init checkpoints/sft-kimi3-small-17M-.../best.pt --steps 200
+            --init checkpoints/sft/sft-kimi3-small-17M-.../best.pt --steps 200
 
     A subset of tasks, bigger groups:
         .venv/bin/python scripts/grpo.py --init ... --tasks copy,parity --group-size 16
 
-Group Relative Policy Optimization (DeepSeekMath, arXiv:2402.03300; the
-DeepSeek-R1 algorithm). Per step, for each of --prompts-per-step task
-prompts:
+The algorithm and environment live in transformer.rl (rollout.py,
+grpo.py, tasks.py — see their docstrings for the math); this script owns
+the run: hyperparameters, the rollout→score→update loop, logging,
+checkpoints, bucket sync.
 
-  1. Sample a group of --group-size completions from the current policy
-     (batched KV-cache decode; the whole group decodes in one batch).
-  2. Score each completion with the task's deterministic reward
-     (scripts/rewards.py — no reward model anywhere).
-  3. Advantage = the completion's reward z-scored within its group.
-     The group baseline replaces PPO's learned value network — that's
-     the whole trick, and why this fits in small memory.
-  4. Update with the PPO clipped surrogate on per-token log-prob ratios,
-     plus a KL penalty to the frozen --init reference (the k3 estimator,
-     exp(ref−cur) − (ref−cur) − 1), which keeps the policy from
-     collapsing into a reward-hacking degenerate.
+Per step: sample --prompts-per-step tasks; decode --group-size
+completions per prompt (one KV-cache batch each); score with the task's
+deterministic reward, minus --no-stop-penalty when a completion never
+emits the end-of-turn byte; z-score rewards within each group
+(transformer.rl.group_advantages); update with the clipped surrogate +
+k3 KL to the frozen --init reference (transformer.rl.grpo_loss).
 
-Rollouts sample at --temperature from raw logits (log-probs are always
-computed from untempered logits; temperatures ≠ 1 are exploration, and
-mildly off-policy). Completions that never emit the end-of-turn byte
-within --max-new get --no-stop-penalty subtracted — stopping is part of
-the task.
+Rollouts sample at --temperature from raw logits (log-probs always come
+from untempered logits; temperature ≠ 1 is exploration, mildly
+off-policy). Evals decode greedily on a fixed seeded task set and drive
+best.pt. NOTE: unlike pretrain.py/sft.py, best_val stored in checkpoints
+is the eval mean *reward* — higher is better.
 
-Evals run greedy decoding on a fixed task set (seeded independently of
-training), report mean reward overall and per task kind, and drive
-best.pt. NOTE: unlike train.py/sft.py, best_val stored in checkpoints is
-the eval mean *reward* — higher is better.
-
-Checkpoints keep the train.py payload, so sample.py works on them; run
-dirs follow the same layout (run.json, metrics.jsonl, tb/, bucket sync)
-with names prefixed "grpo-". Resume with --resume (the frozen reference
-is rebuilt from the init path recorded in run.json).
+Run dirs live at checkpoints/rlvr/rlvr-<name> and mirror to
+gs://<bucket>/runs/rlvr/<name>; TensorBoard at --logdir checkpoints
+groups runs by stage. Checkpoints keep the pretrain.py payload, so
+sample.py works on them. Resume with --resume (the reference is rebuilt
+from the init path recorded in run.json).
 """
 
 import argparse
 import json
-import math
 import random
 import signal
 import sys
@@ -57,13 +48,21 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch
-import torch.nn.functional as F
 
 from transformer import build_model
+from transformer.chat import END_TURN, completion_text, make_prompt
+from transformer.rl import (
+    TASKS,
+    eval_rewards,
+    gather_completion_logprobs,
+    group_advantages,
+    grpo_loss,
+    pad_rollouts,
+    rollout_group,
+    sample_tasks,
+)
 
-from chat_format import END_TURN, completion_text, make_prompt
-from rewards import TASKS, sample_tasks
-from train import (
+from run_utils import (
     BucketSync,
     Tee,
     emit,
@@ -94,7 +93,7 @@ def parse_args() -> argparse.Namespace:
 
     g = p.add_argument_group("rollouts")
     g.add_argument("--tasks", type=str, default=",".join(TASKS),
-                   help="Comma-separated task kinds (see scripts/rewards.py)")
+                   help="Comma-separated task kinds (see transformer/rl/tasks.py)")
     g.add_argument("--prompts-per-step", type=int, default=16)
     g.add_argument("--group-size", type=int, default=8,
                    help="Completions sampled per prompt (the G in GRPO)")
@@ -133,88 +132,6 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--seed", type=int, default=0)
     g.add_argument("--device", type=str, default="mps")
     return p.parse_args()
-
-
-# ---------- Rollout ----------
-
-
-@torch.no_grad()
-def rollout_group(model, prompt: bytes, n: int, max_new: int, temperature: float,
-                  device, greedy: bool = False):
-    """Decode `n` completions of one prompt in a single batch.
-
-    Returns (completions, old_lp, lengths):
-      completions  list of n token-id lists, each cut at its END_TURN
-                   (inclusive) or max_new
-      old_lp       (n, T) log-probs of the sampled tokens under the
-                   policy that sampled them (raw logits, untempered)
-      lengths      (n,) completion lengths
-    """
-    max_new = min(max_new, model.cfg.max_seq_len - len(prompt))
-    ids = torch.tensor([list(prompt)] * n, device=device, dtype=torch.long)
-    cache = model.new_cache(n, device)
-    logits = model(ids, kv_cache=cache)[:, -1]  # (n, V)
-
-    toks, lps = [], []
-    done = torch.zeros(n, dtype=torch.bool, device=device)
-    for _ in range(max_new):
-        lp_all = F.log_softmax(logits, dim=-1)
-        if greedy:
-            tok = logits.argmax(dim=-1, keepdim=True)
-        else:
-            probs = F.softmax(logits / temperature, dim=-1)
-            tok = torch.multinomial(probs, 1)
-        toks.append(tok.squeeze(1))
-        lps.append(lp_all.gather(1, tok).squeeze(1))
-        done |= tok.squeeze(1) == END_TURN
-        if bool(done.all()):
-            break
-        logits = model(tok, kv_cache=cache)[:, -1]
-
-    toks = torch.stack(toks, dim=1)  # (n, T)
-    lps = torch.stack(lps, dim=1)
-    completions, lengths = [], []
-    for row in toks.tolist():
-        cut = row.index(END_TURN) + 1 if END_TURN in row else len(row)
-        completions.append(row[:cut])
-        lengths.append(cut)
-    return completions, lps, lengths
-
-
-def gather_completion_logprobs(model, ids, pos, tok):
-    """Log-probs the model assigns to completion tokens.
-
-    ids (N, L) padded full sequences; pos (N, T) index of the logit that
-    predicts each completion token; tok (N, T) the completion tokens.
-    """
-    logits = model(ids)  # (N, L, V)
-    at = logits.gather(1, pos.unsqueeze(-1).expand(-1, -1, logits.shape[-1]))
-    return F.log_softmax(at, dim=-1).gather(2, tok.unsqueeze(-1)).squeeze(-1)
-
-
-# ---------- Eval ----------
-
-
-def eval_rewards(model, task_names, n_prompts, seed, max_new, device):
-    """Greedy decode a fixed task set; mean reward overall and per kind."""
-    model.eval()
-    try:
-        tasks = sample_tasks(task_names, n_prompts, random.Random(f"{seed}-eval"))
-        by_kind = defaultdict(list)
-        for task in tasks:
-            comps, _, _ = rollout_group(
-                model, make_prompt(task.prompt), 1, max_new, 1.0, device, greedy=True
-            )
-            text = completion_text(bytes(comps[0]))
-            by_kind[task.kind].append(task.score(text))
-        all_scores = [s for v in by_kind.values() for s in v]
-        return (sum(all_scores) / len(all_scores),
-                {k: sum(v) / len(v) for k, v in sorted(by_kind.items())})
-    finally:
-        model.train()
-
-
-# ---------- Main ----------
 
 
 def main() -> None:
@@ -257,8 +174,8 @@ def main() -> None:
     if args.out is not None:
         out_dir = args.out
     elif args.resume is None:
-        name = args.run_name or f"grpo-{generate_run_name(preset, model.num_parameters())}"
-        out_dir = (PROJECT_ROOT / "checkpoints" / name).resolve()
+        name = args.run_name or f"rlvr-{generate_run_name(preset, model.num_parameters())}"
+        out_dir = (PROJECT_ROOT / "checkpoints" / "rlvr" / name).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     log_file = open(out_dir / "train.log", "a", buffering=1)
@@ -298,7 +215,7 @@ def main() -> None:
         manifest_path.write_text(json.dumps({
             "started_at": datetime.now().isoformat(timespec="seconds"),
             "run_name": out_dir.name,
-            "kind": "grpo",
+            "kind": "rlvr-grpo",
             "preset": preset,
             "n_params": model.num_parameters(),
             "init": str(init_path),
@@ -310,10 +227,10 @@ def main() -> None:
     writer = None
     if not args.no_tensorboard and SummaryWriter is not None:
         writer = SummaryWriter(log_dir=str(out_dir / "tb"))
-    sync = BucketSync(out_dir, enabled=not args.no_bucket_sync)
+    sync = BucketSync(out_dir, enabled=not args.no_bucket_sync, stage="rlvr")
     print(f"bucket sync: {sync.dest or 'off'}\n")
 
-    emit(metrics_f, event="start", step=start_step, kind="grpo", preset=preset,
+    emit(metrics_f, event="start", step=start_step, kind="rlvr-grpo", preset=preset,
          n_params=model.num_parameters(), total_steps=args.steps,
          tasks=task_names, group_size=args.group_size,
          prompts_per_step=args.prompts_per_step, lr=args.lr,
@@ -338,10 +255,10 @@ def main() -> None:
             if interrupted["flag"]:
                 break
 
-            # ----- Rollout phase -----
+            # ----- Rollout phase (transformer.rl.rollout) -----
             task_rng = random.Random(f"{args.seed}-{step}")
             tasks = sample_tasks(task_names, args.prompts_per_step, task_rng)
-            seqs = []      # (prompt_bytes, completion_tokens, old_lp_row, reward)
+            seqs = []  # (prompt_bytes, completion_tokens, old_lp_row)
             rewards_pg = torch.zeros(len(tasks), args.group_size)
             kind_scores = defaultdict(list)
             for pi, task in enumerate(tasks):
@@ -350,8 +267,7 @@ def main() -> None:
                     model, prompt, args.group_size, args.max_new,
                     args.temperature, device)
                 for gi, comp in enumerate(comps):
-                    text = completion_text(bytes(comp))
-                    r = task.score(text)
+                    r = task.score(completion_text(bytes(comp)))
                     if comp[-1] != END_TURN:
                         r -= args.no_stop_penalty
                     rewards_pg[pi, gi] = r
@@ -359,60 +275,31 @@ def main() -> None:
                     seqs.append((prompt, comp, lps[gi, : len(comp)].cpu()))
                 tokens_seen += args.group_size * (len(prompt) + max(lengths))
 
-            # Group-relative advantages (the G in GRPO).
-            adv = (rewards_pg - rewards_pg.mean(dim=1, keepdim=True)) / (
-                rewards_pg.std(dim=1, keepdim=True) + 1e-4
-            )
-            adv = adv.reshape(-1).to(device)
-
-            # ----- Tensorize padded batch -----
-            N = len(seqs)
-            pls = [len(p) for p, _, _ in seqs]
+            adv = group_advantages(rewards_pg).to(device)
+            batch = pad_rollouts(seqs).to(device)
+            total_toks = batch.total_tokens
             cls = [len(c) for _, c, _ in seqs]
-            Lmax, Tmax = max(p + c for p, c in zip(pls, cls)), max(cls)
-            ids = torch.zeros(N, Lmax, dtype=torch.long)
-            tok = torch.zeros(N, Tmax, dtype=torch.long)
-            pos = torch.zeros(N, Tmax, dtype=torch.long)
-            mask = torch.zeros(N, Tmax, dtype=torch.bool)
-            old_lp = torch.zeros(N, Tmax)
-            for i, (p, c, lp) in enumerate(seqs):
-                pl, cl = pls[i], cls[i]
-                ids[i, :pl] = torch.tensor(list(p))
-                ids[i, pl : pl + cl] = torch.tensor(c)
-                tok[i, :cl] = torch.tensor(c)
-                pos[i, :cl] = torch.arange(pl - 1, pl - 1 + cl)
-                mask[i, :cl] = True
-                old_lp[i, :cl] = lp
-            ids, tok, pos = ids.to(device), tok.to(device), pos.to(device)
-            mask, old_lp = mask.to(device), old_lp.to(device)
-            total_toks = int(mask.sum().item())
+            N = len(seqs)
 
-            # ----- Update phase -----
+            # ----- Update phase (transformer.rl.grpo) -----
             stats = defaultdict(float)
             for _ in range(args.inner_epochs):
                 optimizer.zero_grad(set_to_none=True)
                 for lo in range(0, N, args.update_microbatch):
                     hi = min(lo + args.update_microbatch, N)
-                    m = mask[lo:hi]
                     new_lp = gather_completion_logprobs(
-                        model, ids[lo:hi], pos[lo:hi], tok[lo:hi])
+                        model, batch.ids[lo:hi], batch.pos[lo:hi], batch.tok[lo:hi])
                     with torch.no_grad():
                         ref_lp = gather_completion_logprobs(
-                            reference, ids[lo:hi], pos[lo:hi], tok[lo:hi])
-                    ratio = torch.exp(new_lp - old_lp[lo:hi])
-                    a = adv[lo:hi].unsqueeze(1)
-                    surr = torch.minimum(
-                        ratio * a,
-                        ratio.clamp(1 - args.clip_eps, 1 + args.clip_eps) * a,
-                    )
-                    d = ref_lp - new_lp
-                    kl = torch.exp(d) - d - 1  # k3 estimator, always ≥ 0
-                    loss = -((surr - args.kl_coef * kl) * m).sum() / total_toks
+                            reference, batch.ids[lo:hi], batch.pos[lo:hi],
+                            batch.tok[lo:hi])
+                    loss, s = grpo_loss(
+                        new_lp, batch.old_lp[lo:hi], ref_lp, adv[lo:hi],
+                        batch.mask[lo:hi], clip_eps=args.clip_eps,
+                        kl_coef=args.kl_coef, total_tokens=total_toks)
                     loss.backward()
-                    with torch.no_grad():
-                        stats["kl"] += float((kl * m).sum().item())
-                        stats["clip"] += float(
-                            ((ratio - 1).abs() > args.clip_eps)[m].sum().item())
+                    stats["kl"] += s["kl"]
+                    stats["clipped"] += s["clipped"]
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     model.parameters(), args.grad_clip)
                 optimizer.step()
@@ -439,7 +326,7 @@ def main() -> None:
                 emit(metrics_f, event="step", step=step, reward=mean_r,
                      reward_by_kind=kinds, mean_len=mean_len, stop_frac=stopped,
                      kl=kl_per_tok, grad_norm=float(grad_norm.item()),
-                     clip_frac=stats["clip"] / (total_toks * args.inner_epochs),
+                     clip_frac=stats["clipped"] / (total_toks * args.inner_epochs),
                      tokens_seen=tokens_seen)
                 if writer is not None:
                     writer.add_scalar("reward/mean", mean_r, step)

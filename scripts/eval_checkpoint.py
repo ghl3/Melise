@@ -15,12 +15,12 @@ Examples:
     Quick smoke test on the first 200 kB of the slice:
         .venv/bin/python scripts/eval_checkpoint.py --max-bytes 200000
 
-The split geometry comes from the --data-mix config (same file train.py
-trains from), so the slice boundaries are byte-for-byte the ones training
-used: train.py loads train+val and never touches the remainder — that
-remainder is the test slice this script reads. For enwik8 with the
-canonical 90/5/5 split, the test slice is the final 5 MB, which no
-training or model-selection decision has ever seen.
+The split geometry comes from the --data-mix config (same file
+pretrain.py trains from), so the slice boundaries are byte-for-byte the
+ones training used: pretraining loads train+val and never touches the
+remainder — that remainder is the test slice this script reads. For
+enwik8 with the canonical 90/5/5 split, the test slice is the final
+5 MB, which no training or model-selection decision has ever seen.
 
 Unlike training's eval (random windows from the val slice), this is a
 deterministic full pass: the slice is cut into contiguous seq-len windows
@@ -45,13 +45,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch
-import torch.nn.functional as F
 
 from transformer import build_model
-
-# Sibling script import: scripts/ is sys.path[0] when running this file.
-# load_data_mix is the single source of truth for split geometry.
-from train import load_data_mix
+from transformer.data import load_data_mix
+from transformer.eval import slice_nll
 
 LN2 = math.log(2.0)
 
@@ -65,8 +62,8 @@ def parse_args() -> argparse.Namespace:
         "checkpoints",
         type=Path,
         nargs="*",
-        help="Checkpoints saved by scripts/train.py. Default: every "
-        "checkpoints/*/best.pt",
+        help="Checkpoints saved by any stage script. Default: every "
+        "checkpoints/<stage>/*/best.pt",
     )
     p.add_argument(
         "--data-mix",
@@ -128,9 +125,9 @@ def pick_device(name: str) -> torch.device:
 def resolve_slice(args: argparse.Namespace) -> tuple[torch.Tensor, str]:
     """Return (slice bytes as a CPU uint8 tensor, description).
 
-    Mirrors train.py's load_data arithmetic exactly: train ends at
-    int(n·train_frac), val at train_end + int(n·val_frac), and the test
-    slice is everything after val — the bytes train.py never loads.
+    Mirrors transformer.data.load_data's arithmetic exactly: train ends
+    at int(n·train_frac), val at train_end + int(n·val_frac), and the
+    test slice is everything after val — bytes pretraining never loads.
     """
     paths, _mults, splits = load_data_mix(args.data_mix)
     path = args.data.resolve()
@@ -162,65 +159,14 @@ def resolve_slice(args: argparse.Namespace) -> tuple[torch.Tensor, str]:
     return sl, desc
 
 
-@torch.no_grad()
-def eval_slice(model, data: torch.Tensor, seq_len: int, batch_size: int,
-               device: torch.device) -> tuple[float, int]:
-    """Total cross-entropy (nats) over a contiguous byte slice.
-
-    The slice is cut into back-to-back windows: window k holds inputs
-    data[k·L : k·L+L] and targets shifted one byte right, so every byte
-    except data[0] is predicted exactly once. Returns (nll_sum, n_pred).
-    """
-    n = data.shape[0]
-    starts = list(range(0, n - 1, seq_len))
-    nll_sum = 0.0
-    n_pred = 0
-    t0 = time.perf_counter()
-    for i in range(0, len(starts), batch_size):
-        batch = starts[i : i + batch_size]
-        # The final window may be short; length-group so we can stack.
-        lengths = [min(seq_len, n - 1 - s) for s in batch]
-        full = [s for s, l in zip(batch, lengths) if l == seq_len]
-        ragged = [(s, l) for s, l in zip(batch, lengths) if l < seq_len]
-        chunks = []
-        if full:
-            chunks.append(
-                (torch.stack([data[s : s + seq_len] for s in full]),
-                 torch.stack([data[s + 1 : s + 1 + seq_len] for s in full]))
-            )
-        for s, l in ragged:
-            chunks.append((data[s : s + l].unsqueeze(0),
-                           data[s + 1 : s + 1 + l].unsqueeze(0)))
-        for inputs, targets in chunks:
-            inputs = inputs.long().to(device)
-            targets = targets.long().to(device)
-            logits = model(inputs)
-            nll = F.cross_entropy(
-                logits.view(-1, model.cfg.vocab_size),
-                targets.view(-1),
-                reduction="sum",
-            )
-            nll_sum += float(nll.item())
-            n_pred += targets.numel()
-        if (i // batch_size) % 50 == 0 and i > 0:
-            elapsed = time.perf_counter() - t0
-            tps = n_pred / elapsed
-            eta = (n - 1 - n_pred) / tps
-            print(
-                f"    {n_pred:>10,}/{n - 1:,} bytes  "
-                f"bpb so far {nll_sum / n_pred / LN2:.3f}  "
-                f"({tps:,.0f} B/s, ETA {eta / 60:.0f}m)"
-            )
-    return nll_sum, n_pred
-
-
 def main() -> None:
     args = parse_args()
     device = pick_device(args.device)
     torch.set_float32_matmul_precision("high")
 
     ckpt_paths = args.checkpoints or sorted(
-        (PROJECT_ROOT / "checkpoints").glob("*/best.pt")
+        list((PROJECT_ROOT / "checkpoints").glob("*/*/best.pt"))
+        + list((PROJECT_ROOT / "checkpoints").glob("*/best.pt"))  # pre-stage layout
     )
     if not ckpt_paths:
         raise SystemExit(
@@ -249,7 +195,7 @@ def main() -> None:
         seq_len = args.seq_len or cfg.max_seq_len
 
         t0 = time.perf_counter()
-        nll_sum, n_pred = eval_slice(model, data, seq_len, args.batch_size, device)
+        nll_sum, n_pred = slice_nll(model, data, seq_len, args.batch_size, device)
         elapsed = time.perf_counter() - t0
         bpb = nll_sum / n_pred / LN2
         print(f"    bpb={bpb:.4f}  loss={nll_sum / n_pred:.4f} nats  "

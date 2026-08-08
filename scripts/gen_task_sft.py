@@ -6,7 +6,7 @@ Example:
     .venv/bin/python scripts/gen_task_sft.py --n 50000 --seed 1
 
 Writes data/chat_tasks.txt: single-turn conversations in the byte chat
-template whose prompts come from the scripts/rewards.py generators and
+template whose prompts come from the transformer.rl.tasks generators and
 whose responses are each task's canonical full-credit answer. Because
 sft.py picks up every data/chat_*.txt, this joins the SFT mix
 automatically.
@@ -35,8 +35,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from chat_format import encode_conversation
-from rewards import TASKS
+from transformer.chat import encode_conversation
+from transformer.rl import TASKS
 
 def main() -> None:
     p = argparse.ArgumentParser(
