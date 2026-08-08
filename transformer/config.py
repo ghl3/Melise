@@ -40,6 +40,13 @@ class Config:
     # Storage / compute dtype for weights and activations.
     dtype: torch.dtype = torch.bfloat16
 
+    # Which tokenizer this model's ids come from: "bytes" (the 256 byte
+    # values) or a trained artifact name like "bpe4k"
+    # (transformer.tokenizer.load_tokenizer resolves it). Serialized into
+    # checkpoints via the config; read with getattr(cfg, "tokenizer",
+    # "bytes") for pre-field checkpoints.
+    tokenizer: str = "bytes"
+
     # RoPE frequency base.
     rope_base: float = 10000.0
 

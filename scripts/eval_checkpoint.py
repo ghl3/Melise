@@ -49,6 +49,7 @@ import torch
 from transformer import build_model
 from transformer.data import load_data_mix
 from transformer.eval import slice_nll
+from transformer.tokenizer import load_tokenizer
 
 LN2 = math.log(2.0)
 
@@ -194,24 +195,38 @@ def main() -> None:
         model.eval()
         seq_len = args.seq_len or cfg.max_seq_len
 
+        # Evaluate in the model's own token space; bpb always normalizes
+        # by BYTES of the slice, so numbers are comparable across
+        # tokenizers. (Slice boundaries are byte-defined either way.)
+        tok = load_tokenizer(getattr(cfg, "tokenizer", "bytes"))
+        n_bytes = data.shape[0]
+        if tok.name == "bytes":
+            eval_data = data
+        else:
+            eval_data = torch.tensor(tok.encode(data.numpy().tobytes()),
+                                     dtype=torch.long)
+
         t0 = time.perf_counter()
-        nll_sum, n_pred = slice_nll(model, data, seq_len, args.batch_size, device)
+        nll_sum, n_pred = slice_nll(model, eval_data, seq_len, args.batch_size, device)
         elapsed = time.perf_counter() - t0
-        bpb = nll_sum / n_pred / LN2
-        print(f"    bpb={bpb:.4f}  loss={nll_sum / n_pred:.4f} nats  "
-              f"({n_pred:,} bytes in {elapsed:.0f}s)")
+        denom = n_pred if tok.name == "bytes" else n_bytes
+        bpb = nll_sum / denom / LN2
+        print(f"    bpb={bpb:.4f}  loss={nll_sum / n_pred:.4f} nats/token  "
+              f"({n_pred:,} tokens over {n_bytes:,} bytes in {elapsed:.0f}s)")
         results.append({
             "run": run,
             "checkpoint": str(path),
             "preset": ckpt.get("preset"),
+            "tokenizer": tok.name,
             "n_params": model.num_parameters(),
             "step": ckpt.get("step"),
             "tokens_seen": ckpt.get("tokens_seen"),
             "split": args.split,
             "data": args.data.name,
             "seq_len": seq_len,
-            "bytes": n_pred,
-            "loss_nats": nll_sum / n_pred,
+            "bytes": n_bytes,
+            "tokens": n_pred,
+            "loss_nats_per_token": nll_sum / n_pred,
             "bpb": bpb,
             "time": datetime.now().isoformat(timespec="seconds"),
         })

@@ -103,9 +103,9 @@ def sampled_val_loss(model, val_datasets, weights, batch_size: int,
 
 @torch.no_grad()
 def masked_conversation_loss(model, val_convs, batch_size: int, seq_len: int,
-                             n_batches: int, device) -> float:
+                             n_batches: int, device, tok=None) -> float:
     """Deterministic masked loss over a fixed prefix of the val set
-    (nats per assistant byte)."""
+    (nats per assistant token)."""
     was_training = model.training
     model.eval()
     try:
@@ -114,7 +114,8 @@ def masked_conversation_loss(model, val_convs, batch_size: int, seq_len: int,
             idx = list(range(b * batch_size, min((b + 1) * batch_size, len(val_convs))))
             if not idx:
                 break
-            inputs, targets, mask = conversation_batch(val_convs, idx, seq_len, device)
+            inputs, targets, mask = conversation_batch(
+                val_convs, idx, seq_len, device, tok=tok)
             logits = model(inputs)
             nll = F.cross_entropy(logits[mask], targets[mask], reduction="sum")
             total += float(nll.item())

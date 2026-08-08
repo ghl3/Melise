@@ -50,7 +50,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import torch
 
 from transformer import build_model
-from transformer.chat import END_TURN, completion_text, make_prompt
+from transformer.chat import make_prompt_ids
+from transformer.tokenizer import load_tokenizer
 from transformer.rl import (
     TASKS,
     eval_rewards,
@@ -163,6 +164,7 @@ def main() -> None:
     preset = ckpt.get("preset", "?")
     model = build_model(cfg).to(device)
     model.load_state_dict(ckpt["model"])
+    tok = load_tokenizer(getattr(cfg, "tokenizer", "bytes"))
 
     ref_ckpt = torch.load(init_path, map_location="cpu", weights_only=False)
     reference = build_model(ref_ckpt["config"]).to(device)
@@ -272,22 +274,26 @@ def main() -> None:
             # ----- Rollout phase (transformer.rl.rollout) -----
             task_rng = random.Random(f"{args.seed}-{step}")
             tasks = sample_tasks(task_names, args.prompts_per_step, task_rng)
-            seqs = []  # (prompt_bytes, completion_tokens, old_lp_row)
+            seqs = []  # (prompt_ids, completion_tokens, old_lp_row)
             rewards_pg = torch.zeros(len(tasks), args.group_size)
             kind_scores = defaultdict(list)
             for pi, task in enumerate(tasks):
-                prompt = make_prompt(task.prompt)
+                prompt = make_prompt_ids(task.prompt, tok)
                 comps, lps, lengths = rollout_group(
                     model, prompt, args.group_size, args.max_new,
-                    args.temperature, device)
+                    args.temperature, device, stop_id=tok.end_turn_id)
                 for gi, comp in enumerate(comps):
-                    r = task.score(completion_text(bytes(comp)))
-                    if comp[-1] != END_TURN:
+                    r = task.score(tok.decode(comp).strip())
+                    if comp[-1] != tok.end_turn_id:
                         r -= args.no_stop_penalty
                     rewards_pg[pi, gi] = r
                     kind_scores[task.kind].append(r)
                     seqs.append((prompt, comp, lps[gi, : len(comp)].cpu()))
                 tokens_seen += args.group_size * (len(prompt) + max(lengths))
+
+            # Dead groups produce zero advantage — the direct gauge of
+            # the cold-start problem (tasks the policy never varies on).
+            dead_frac = float((rewards_pg.std(dim=1) < 1e-6).float().mean())
 
             adv = group_advantages(rewards_pg).to(device)
             batch = pad_rollouts(seqs).to(device)
@@ -325,20 +331,25 @@ def main() -> None:
                 elapsed = time.perf_counter() - t_start
                 eta = (elapsed / n_done) * (args.steps - step)
                 mean_r = float(rewards_pg.mean())
-                stopped = sum(1 for _, c, _ in seqs if c[-1] == END_TURN) / N
+                stopped = sum(1 for _, c, _ in seqs if c[-1] == tok.end_turn_id) / N
                 mean_len = sum(cls) / N
                 kl_per_tok = stats["kl"] / (total_toks * args.inner_epochs)
+                # Mean -log p of sampled tokens ≈ policy entropy (collapse
+                # early-warning; rising confidence drives it toward 0).
+                entropy = float((-batch.old_lp * batch.mask).sum() / total_toks)
                 kinds = {k: sum(v) / len(v) for k, v in sorted(kind_scores.items())}
                 kinds_str = "  ".join(f"{k}={v:.2f}" for k, v in kinds.items())
                 print(f"step {step:>4}/{args.steps}  reward={mean_r:.3f}  "
                       f"[{kinds_str}]  len={mean_len:.0f}  stop={stopped:.0%}  "
+                      f"dead={dead_frac:.0%}  ent={entropy:.2f}  "
                       f"kl={kl_per_tok:.4f}  grad={float(grad_norm.item()):.2f}  "
                       f"ETA {fmt_eta(eta)}")
                 ex_task, ex = tasks[0], seqs[0]
                 print(f"      e.g. {ex_task.prompt!r} -> "
-                      f"{completion_text(bytes(ex[1]))!r}  r={float(rewards_pg[0, 0]):.2f}")
+                      f"{tok.decode(ex[1]).strip()!r}  r={float(rewards_pg[0, 0]):.2f}")
                 emit(metrics_f, event="step", step=step, reward=mean_r,
                      reward_by_kind=kinds, mean_len=mean_len, stop_frac=stopped,
+                     dead_frac=dead_frac, entropy=entropy,
                      kl=kl_per_tok, grad_norm=float(grad_norm.item()),
                      clip_frac=stats["clipped"] / (total_toks * args.inner_epochs),
                      tokens_seen=tokens_seen)
@@ -348,12 +359,15 @@ def main() -> None:
                         writer.add_scalar(f"reward/{k}", v, step)
                     writer.add_scalar("rollout/mean_len", mean_len, step)
                     writer.add_scalar("rollout/stop_frac", stopped, step)
+                    writer.add_scalar("rollout/dead_frac", dead_frac, step)
+                    writer.add_scalar("rollout/entropy", entropy, step)
                     writer.add_scalar("train/kl", kl_per_tok, step)
                     writer.add_scalar("train/grad_norm", float(grad_norm.item()), step)
 
             if step % args.eval_every == 0:
                 mean_r, kinds = eval_rewards(model, task_names, args.eval_prompts,
-                                             args.seed, args.max_new, device)
+                                             args.seed, args.max_new, device,
+                                             tok=tok)
                 is_best = mean_r > best_reward
                 if is_best:
                     best_reward, best_step = mean_r, step

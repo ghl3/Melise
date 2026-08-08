@@ -28,6 +28,13 @@ class VanillaConfig:
     n_heads: int = 8
     ffn_hidden: int = 2048
     dtype: torch.dtype = torch.bfloat16
+
+    # Which tokenizer this model's ids come from: "bytes" (the 256
+    # byte values) or a trained artifact name like "bpe4k"
+    # (transformer.tokenizer.load_tokenizer resolves it). Serialized into
+    # checkpoints via the config; read with getattr(cfg, "tokenizer",
+    # "bytes") for pre-field checkpoints.
+    tokenizer: str = "bytes"
     rope_base: float = 10000.0
 
 

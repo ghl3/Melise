@@ -75,6 +75,7 @@ import torch.nn.functional as F
 from transformer import MODELS, build_model, generate
 from transformer.data import get_batch, load_data, load_data_mix, parse_weights
 from transformer.eval import sampled_val_loss
+from transformer.tokenizer import load_tokenizer
 
 from run_utils import (
     BucketSync,
@@ -118,6 +119,15 @@ def parse_args() -> argparse.Namespace:
         help="Architecture to train: base (GQA + MoE), vanilla (MHA + dense), "
         "deepseek (MLA + DeepSeekMoE), kimi3 (KDA/MLA hybrid + AttnRes + LatentMoE). "
         "Ignored when resuming — the checkpoint's config wins",
+    )
+    g.add_argument(
+        "--tokenizer",
+        type=str,
+        default="bytes",
+        help="'bytes' (vocab 256) or a trained artifact name like 'bpe4k' "
+        "(configs/tokenizer-bpe4k.json). Sets vocab_size and is embedded "
+        "in the config, so every downstream stage inherits it. Ignored "
+        "when resuming",
     )
 
     g = p.add_argument_group("training")
@@ -268,15 +278,13 @@ def resolve_run_dir(args: argparse.Namespace, preset: str, n_params: int) -> Pat
 
 
 @torch.no_grad()
-def sample_text(model, device, prompt, n_tokens):
+def sample_text(model, device, prompt: str, n_tokens, tok):
     was_training = model.training
     model.eval()
     try:
-        ids = torch.tensor([list(prompt)], device=device, dtype=torch.long)
+        ids = torch.tensor([tok.encode(prompt)], device=device, dtype=torch.long)
         out_ids = generate(model, ids, max_new_tokens=n_tokens)
-        out_bytes = bytes(b if 0 <= b < 256 else 0x3F for b in out_ids)
-        full = prompt + out_bytes
-        return full.decode("utf-8", errors="replace")
+        return prompt + tok.decode(out_ids)
     finally:
         if was_training:
             model.train()
@@ -339,8 +347,11 @@ def main() -> None:
     else:
         preset = args.preset
         config_cls, model_cls = MODELS[preset]
-        cfg = config_cls(dtype=torch.float32, max_seq_len=args.seq_len)
+        _tok = load_tokenizer(args.tokenizer)
+        cfg = config_cls(dtype=torch.float32, max_seq_len=args.seq_len,
+                         vocab_size=_tok.vocab_size, tokenizer=_tok.name)
         model = model_cls(cfg).to(device)
+    tok = load_tokenizer(getattr(cfg, "tokenizer", "bytes"))
 
     out_dir = resolve_run_dir(args, preset, model.num_parameters())
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -367,7 +378,8 @@ def main() -> None:
     )
     print(
         f"model:   {preset} ({type(model).__name__}), {model.num_parameters():,} params, "
-        f"dtype={cfg.dtype}, device={device}"
+        f"dtype={cfg.dtype}, tokenizer={tok.name} (vocab {tok.vocab_size}), "
+        f"device={device}"
     )
 
     optimizer = torch.optim.AdamW(
@@ -417,7 +429,8 @@ def main() -> None:
         # Legacy --data path: hold out the last val_frac of every file.
         splits = {p: (1.0 - args.val_frac, args.val_frac) for p in args.data}
 
-    train_data, val_data, val_bytes, byte_counts = load_data(args.data, device, splits)
+    train_data, val_data, val_bytes, byte_counts = load_data(
+        args.data, device, splits, tok=tok)
     if mix_mults is not None:
         weights = torch.tensor([b * m for b, m in zip(byte_counts, mix_mults)])
     else:
@@ -631,7 +644,7 @@ def main() -> None:
 
             if step % args.sample_every == 0 and not args.no_sample:
                 text = sample_text(
-                    model, device, args.sample_prompt.encode(), args.sample_tokens
+                    model, device, args.sample_prompt, args.sample_tokens, tok
                 ).rstrip()
                 print("---")
                 print(text)

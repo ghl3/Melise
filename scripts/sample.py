@@ -32,6 +32,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import torch
 
 from transformer import build_model, generate
+from transformer.tokenizer import load_tokenizer
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,25 +93,21 @@ def main() -> None:
     model = build_model(cfg).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
+    tok = load_tokenizer(getattr(cfg, "tokenizer", "bytes"))
     print(f"  {type(model).__name__}  step={step}  {model.num_parameters():,} params  "
-          f"dtype={cfg.dtype}  device={device}")
+          f"dtype={cfg.dtype}  tokenizer={tok.name}  device={device}")
 
     # Interpret backslash escapes (\n, \t) in the user-provided prompt.
     prompt_str = args.prompt.encode().decode("unicode_escape")
-    prompt_bytes = prompt_str.encode("utf-8")
-    print(f"  prompt: {prompt_bytes!r}")
+    print(f"  prompt: {prompt_str!r}")
     print(f"  generating {args.tokens} tokens "
           f"(temperature={args.temperature}{', top_k=' + str(args.top_k) if args.top_k else ''})")
     print()
 
-    ids = torch.tensor([list(prompt_bytes)], device=device, dtype=torch.long)
+    ids = torch.tensor([tok.encode(prompt_str)], device=device, dtype=torch.long)
     sampler = make_sampler(args.temperature, args.top_k)
     out_ids = generate(model, ids, max_new_tokens=args.tokens, sample_fn=sampler)
-
-    # Decode bytes to text. Replace bytes outside the printable range gracefully.
-    out_bytes = bytes(b if 0 <= b < 256 else 0x3f for b in out_ids)
-    full = prompt_bytes + out_bytes
-    print(full.decode("utf-8", errors="replace"))
+    print(prompt_str + tok.decode(out_ids))
 
 
 if __name__ == "__main__":

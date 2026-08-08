@@ -14,21 +14,26 @@ from collections import defaultdict
 import torch
 import torch.nn.functional as F
 
-from ..chat import END_TURN, completion_text, make_prompt
+from ..chat import END_TURN, make_prompt_ids
+from ..tokenizer import ByteTokenizer
 from .tasks import sample_tasks
 
 
 @torch.no_grad()
-def rollout_group(model, prompt: bytes, n: int, max_new: int, temperature: float,
-                  device, greedy: bool = False):
-    """Decode `n` completions of one prompt in a single batch.
+def rollout_group(model, prompt, n: int, max_new: int, temperature: float,
+                  device, greedy: bool = False, stop_id: int = END_TURN):
+    """Decode `n` completions of one prompt (a token-id sequence) in a
+    single batch.
 
     Returns (completions, old_lp, lengths):
-      completions  list of n token-id lists, each cut at its END_TURN
+      completions  list of n token-id lists, each cut at its stop_id
                    (inclusive) or max_new
       old_lp       (n, T) log-probs of the sampled tokens under the
                    policy that sampled them (raw logits, untempered)
       lengths      (n,) completion lengths
+
+    stop_id defaults to the end-turn id, which is 3 under every
+    tokenizer (byte template and BPE specials are pinned identically).
     """
     max_new = min(max_new, model.cfg.max_seq_len - len(prompt))
     ids = torch.tensor([list(prompt)] * n, device=device, dtype=torch.long)
@@ -46,7 +51,7 @@ def rollout_group(model, prompt: bytes, n: int, max_new: int, temperature: float
             tok = torch.multinomial(probs, 1)
         toks.append(tok.squeeze(1))
         lps.append(lp_all.gather(1, tok).squeeze(1))
-        done |= tok.squeeze(1) == END_TURN
+        done |= tok.squeeze(1) == stop_id
         if bool(done.all()):
             break
         logits = model(tok, kv_cache=cache)[:, -1]
@@ -55,7 +60,7 @@ def rollout_group(model, prompt: bytes, n: int, max_new: int, temperature: float
     lps = torch.stack(lps, dim=1)
     completions, lengths = [], []
     for row in toks.tolist():
-        cut = row.index(END_TURN) + 1 if END_TURN in row else len(row)
+        cut = row.index(stop_id) + 1 if stop_id in row else len(row)
         completions.append(row[:cut])
         lengths.append(cut)
     return completions, lps, lengths
@@ -73,8 +78,10 @@ def gather_completion_logprobs(model, ids, pos, tok):
     return F.log_softmax(at, dim=-1).gather(2, tok.unsqueeze(-1)).squeeze(-1)
 
 
-def eval_rewards(model, task_names, n_prompts: int, seed, max_new: int, device):
+def eval_rewards(model, task_names, n_prompts: int, seed, max_new: int, device,
+                 tok=None):
     """Greedy decode a fixed task set; mean reward overall and per kind."""
+    tok = tok or ByteTokenizer()
     was_training = model.training
     model.eval()
     try:
@@ -82,9 +89,10 @@ def eval_rewards(model, task_names, n_prompts: int, seed, max_new: int, device):
         by_kind = defaultdict(list)
         for task in tasks:
             comps, _, _ = rollout_group(
-                model, make_prompt(task.prompt), 1, max_new, 1.0, device, greedy=True
+                model, make_prompt_ids(task.prompt, tok), 1, max_new, 1.0,
+                device, greedy=True, stop_id=tok.end_turn_id,
             )
-            text = completion_text(bytes(comps[0]))
+            text = tok.decode(comps[0]).strip()
             by_kind[task.kind].append(task.score(text))
         all_scores = [s for v in by_kind.values() for s in v]
         return (sum(all_scores) / len(all_scores),

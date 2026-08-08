@@ -80,6 +80,13 @@ class Kimi3Config:
     dense_hidden: int = 1024        # the single dense FFN (first layer)
     dtype: torch.dtype = torch.bfloat16
 
+    # Which tokenizer this model's ids come from: "bytes" (the 256
+    # byte values) or a trained artifact name like "bpe4k"
+    # (transformer.tokenizer.load_tokenizer resolves it). Serialized into
+    # checkpoints via the config; read with getattr(cfg, "tokenizer",
+    # "bytes") for pre-field checkpoints.
+    tokenizer: str = "bytes"
+
     @property
     def n_layers(self) -> int:
         """Attention layers: n_blocks × (3 KDA + 1 MLA) + the final MLA."""

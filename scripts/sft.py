@@ -50,9 +50,10 @@ import torch
 import torch.nn.functional as F
 
 from transformer import build_model, generate
-from transformer.chat import completion_text, make_prompt
+from transformer.chat import make_prompt_ids, split_conversations
 from transformer.data import conversation_batch, load_conversations
 from transformer.eval import masked_conversation_loss
+from transformer.tokenizer import load_tokenizer
 
 from run_utils import (
     BucketSync,
@@ -134,14 +135,16 @@ def parse_args() -> argparse.Namespace:
 
 
 @torch.no_grad()
-def sample_chat(model, device, user_text: str, max_new: int = 128) -> str:
+def sample_chat(model, device, user_text: str, tok, max_new: int = 128) -> str:
     was_training = model.training
     model.eval()
     try:
-        prompt = make_prompt(user_text)
-        ids = torch.tensor([list(prompt)], device=device, dtype=torch.long)
+        ids = torch.tensor([make_prompt_ids(user_text, tok)],
+                           device=device, dtype=torch.long)
         out = generate(model, ids, max_new_tokens=max_new)
-        return completion_text(bytes(b & 0xFF for b in out))
+        if tok.end_turn_id in out:
+            out = out[: out.index(tok.end_turn_id)]
+        return tok.decode(out).strip()
     finally:
         if was_training:
             model.train()
@@ -164,6 +167,7 @@ def main() -> None:
         cfg = dataclasses.replace(cfg, max_seq_len=args.seq_len)
     model = build_model(cfg).to(device)
     model.load_state_dict(ckpt["model"])
+    tok = load_tokenizer(getattr(cfg, "tokenizer", "bytes"))
 
     if args.out is not None:
         out_dir = args.out
@@ -217,14 +221,19 @@ def main() -> None:
 
     data_paths = args.data or sorted((PROJECT_ROOT / "data").glob("chat_*.txt"))
     train_convs, val_convs = load_conversations(
-        data_paths, args.seed, args.val_frac, seq_len=args.seq_len)
+        data_paths, args.seed, args.val_frac, seq_len=args.seq_len, tok=tok)
     n_bytes = sum(len(c) for c in train_convs)
     print(f"data: {len(train_convs):,} train / {len(val_convs):,} val examples "
           f"({n_bytes / 1e6:.1f} MB train; long conversations split at turn "
           f"boundaries to fit seq_len) from {[p.name for p in data_paths]}")
-    truncated = sum(1 for c in train_convs if len(c) > args.seq_len + 1)
-    print(f"      {truncated:,} single turns exceed seq_len and will be truncated "
-          f"({truncated / len(train_convs):.2%})")
+
+    # Cold-start diagnostic: a fixed slice of the synthetic task corpus,
+    # evaluated separately so task-following progress is visible apart
+    # from general chat loss. (Overlaps the train pool — a diagnostic,
+    # not a held-out benchmark.)
+    tasks_path = PROJECT_ROOT / "data" / "chat_tasks.txt"
+    val_tasks_convs = (split_conversations(tasks_path.read_bytes())[:128]
+                       if tasks_path.exists() else [])
 
     manifest_path = out_dir / "run.json"
     if not manifest_path.exists():
@@ -287,7 +296,7 @@ def main() -> None:
 
             idx = torch.randint(0, len(train_convs), (args.batch_size,)).tolist()
             inputs, targets, mask = conversation_batch(
-                train_convs, idx, args.seq_len, device)
+                train_convs, idx, args.seq_len, device, tok=tok)
             logits = model(inputs)
             loss = F.cross_entropy(logits[mask], targets[mask])
 
@@ -320,24 +329,34 @@ def main() -> None:
 
             if step % args.eval_every == 0:
                 val = masked_conversation_loss(model, val_convs, args.batch_size,
-                                               args.seq_len, args.eval_batches, device)
+                                               args.seq_len, args.eval_batches,
+                                               device, tok=tok)
+                val_tasks = (masked_conversation_loss(
+                    model, val_tasks_convs, args.batch_size, args.seq_len, 4,
+                    device, tok=tok) if val_tasks_convs else None)
                 is_best = val < best_val
                 if is_best:
                     best_val, best_step = val, step
                     full_save(out_dir / "best.pt", step)
+                tasks_str = (f"  tasks_bpb={val_tasks / LN2:.3f}"
+                             if val_tasks is not None else "")
                 print(f"        val_loss={val:.4f}  val_bpb={val / LN2:.3f}"
-                      + ("  ← best" if is_best else ""))
+                      f"{tasks_str}" + ("  ← best" if is_best else ""))
                 emit(metrics_f, event="eval", step=step, val_loss=val,
-                     val_bpb=val / LN2, tokens_seen=tokens_seen, is_best=is_best)
+                     val_bpb=val / LN2,
+                     val_tasks_bpb=val_tasks / LN2 if val_tasks is not None else None,
+                     tokens_seen=tokens_seen, is_best=is_best)
                 if writer is not None:
                     writer.add_scalar("val/loss", val, step)
                     writer.add_scalar("val/bpb", val / LN2, step)
+                    if val_tasks is not None:
+                        writer.add_scalar("val/tasks_bpb", val_tasks / LN2, step)
                     writer.flush()
                 sync.kick()
 
             if step % args.sample_every == 0 and not args.no_sample:
                 for prompt in SAMPLE_PROMPTS:
-                    reply = sample_chat(model, device, prompt)
+                    reply = sample_chat(model, device, prompt, tok)
                     print(f"--- {prompt!r}\n{reply}\n---")
                     emit(metrics_f, event="sample", step=step, prompt=prompt, text=reply)
                     if writer is not None:

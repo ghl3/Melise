@@ -122,3 +122,53 @@ def completion_text(raw: bytes) -> str:
     cut = raw.split(bytes([END_TURN]))[0]
     cut = bytes(b for b in cut if b not in (USER, ASSISTANT, END_CONV))
     return cut.decode("utf-8", errors="replace").strip()
+
+
+# ---------- Token-id space (any tokenizer) ----------
+#
+# The functions above operate on the byte template — the on-disk storage
+# format. The functions below produce/consume token ids under any
+# tokenizer (transformer.tokenizer): for ByteTokenizer they reproduce
+# the byte behavior exactly (special ids ARE the marker bytes); for BPE
+# the content spans compress. Special ids are injected here, never
+# parsed out of content (encode() strips the characters that spell them).
+
+
+def encode_ids(conv: bytes, tok) -> list[int]:
+    """A stored byte-template conversation -> token ids."""
+    ids = []
+    for role, content in parse_turns(conv):
+        ids.append(tok.user_id if role == "user" else tok.assistant_id)
+        ids.extend(tok.encode(content))
+        ids.append(tok.end_turn_id)
+    ids.append(tok.end_conv_id)
+    return ids
+
+
+def assistant_mask_ids(ids: list[int], tok) -> list[bool]:
+    """Per-token loss mask over encode_ids output — True on assistant
+    content, its end-turn id, and end-conv (same rules as
+    assistant_mask)."""
+    mask = [False] * len(ids)
+    in_assistant = False
+    for i, t in enumerate(ids):
+        if t == tok.assistant_id:
+            in_assistant = True
+        elif t == tok.end_turn_id:
+            if in_assistant:
+                mask[i] = True
+            in_assistant = False
+        elif t == tok.user_id:
+            in_assistant = False
+        elif t == tok.end_conv_id:
+            mask[i] = True
+        elif in_assistant:
+            mask[i] = True
+    return mask
+
+
+def make_prompt_ids(user_text: str, tok) -> list[int]:
+    """Generation prompt: user turn + assistant marker, as token ids.
+    Decoding should stop at tok.end_turn_id."""
+    return ([tok.user_id] + tok.encode(sanitize(user_text).strip())
+            + [tok.end_turn_id, tok.assistant_id])

@@ -50,6 +50,13 @@ class DeepSeekConfig:
     shared_expert_hidden: int = 1024
     bias_update_rate: float = 1e-3  # balancing-bias step γ
     dtype: torch.dtype = torch.bfloat16
+
+    # Which tokenizer this model's ids come from: "bytes" (the 256
+    # byte values) or a trained artifact name like "bpe4k"
+    # (transformer.tokenizer.load_tokenizer resolves it). Serialized into
+    # checkpoints via the config; read with getattr(cfg, "tokenizer",
+    # "bytes") for pre-field checkpoints.
+    tokenizer: str = "bytes"
     rope_base: float = 10000.0
 
 

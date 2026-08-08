@@ -100,9 +100,10 @@ growing files under their writers and freezes them; learned the hard way).
 - `scripts/rebuild_tb.py <run-dir>` regenerates `tb/` from metrics.jsonl.
 - `scripts/recover_metrics.py <stdout-log> <run-dir>` reconstructs
   metrics.jsonl from the run's printed log if it's ever lost.
-- View everything (VM on or off): `tensorboard --logdir gs://<bucket>/runs`
-  — needs `pip install gcsfs` and one-time `gcloud auth application-default
-  login`. The training VM's own TensorBoard serves its local runs live.
+- View everything (VM on or off): `bash scripts/tb_bucket.sh` (optionally
+  `runs/sft` for one stage) — needs `pip install gcsfs` and one-time
+  `gcloud auth application-default login`. The training VM's own
+  TensorBoard serves its local runs live.
 - Offline eval results append to `<run>/evals.jsonl` (eval_checkpoint.py)
   and sync with the run.
 
