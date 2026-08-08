@@ -12,8 +12,9 @@ function Bubble({ role, text, streaming }: {
   return (
     <div className={user ? "flex justify-end" : "flex justify-start"}>
       <div
+        data-role={role}
         className={
-          "max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed " +
+          "max-w-[85%] select-text whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed " +
           (user
             ? "rounded-br-md border border-line bg-fern"
             : "rounded-bl-md border border-line/60 bg-panel") +
@@ -32,14 +33,34 @@ export default function MessageList({ messages, draft, samples, onSample }: {
   samples: string[];
   onSample: (text: string) => void;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
   }, [messages, draft]);
 
+  // A drag across several bubbles copies a labeled transcript; a
+  // selection inside one bubble keeps native copy behavior.
+  const handleCopy = (e: React.ClipboardEvent) => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !listRef.current) return;
+    const range = sel.getRangeAt(0);
+    const hit = [...listRef.current.querySelectorAll<HTMLElement>("[data-role]")]
+      .filter((b) => range.intersectsNode(b));
+    if (hit.length < 2) return;
+    const parts = hit.map((b) => {
+      const r = range.cloneRange();
+      if (!b.contains(r.startContainer)) r.setStartBefore(b);
+      if (!b.contains(r.endContainer)) r.setEndAfter(b);
+      return `${b.dataset.role === "user" ? "You" : "Model"}: ${r.toString().trim()}`;
+    });
+    e.clipboardData.setData("text/plain", parts.join("\n\n"));
+    e.preventDefault();
+  };
+
   if (!messages.length && draft === null) {
     return (
-      <div className="flex flex-1 items-center justify-center">
+      <div className="flex flex-1 select-none items-center justify-center">
         <div className="max-w-md rounded-2xl border border-line bg-panel/70 p-6 text-center">
           <p className="text-sm leading-relaxed text-dim">
             You&apos;re talking to a{" "}
@@ -65,7 +86,11 @@ export default function MessageList({ messages, draft, samples, onSample }: {
   }
 
   return (
-    <div className="flex-1 space-y-3 overflow-y-auto py-4">
+    <div
+      ref={listRef}
+      onCopy={handleCopy}
+      className="flex-1 space-y-3 overflow-y-auto py-4"
+    >
       {messages.map((m, i) => (
         <Bubble key={i} role={m.role} text={m.content} />
       ))}

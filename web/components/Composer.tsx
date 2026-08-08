@@ -31,7 +31,7 @@ export default function Composer({ onSend, onStop, streaming }: {
         }}
         placeholder="Say something small…"
         rows={Math.min(4, Math.max(1, text.split("\n").length))}
-        className="max-h-36 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-ink outline-none placeholder:text-dim/60"
+        className="max-h-36 flex-1 select-text resize-none bg-transparent px-2 py-1.5 text-sm text-ink outline-none placeholder:text-dim/60"
       />
       {streaming ? (
         <button

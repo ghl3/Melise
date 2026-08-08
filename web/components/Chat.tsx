@@ -96,7 +96,7 @@ export default function Chat() {
 
   return (
     <div className="mx-auto flex h-dvh max-w-3xl flex-col px-4">
-      <header className="flex items-center justify-between gap-3 border-b border-line py-4">
+      <header className="flex select-none items-center justify-between gap-3 border-b border-line py-4">
         <div className="flex items-baseline gap-3">
           <span aria-hidden className="text-xl text-moss">❦</span>
           <div>
@@ -136,7 +136,7 @@ export default function Chat() {
         onSample={send}
       />
 
-      <div className="pb-4">
+      <div className="select-none pb-4">
         {error && (
           <p className="mb-2 rounded-lg border border-alert/40 bg-panel px-3 py-2 text-xs text-alert">
             {error}
