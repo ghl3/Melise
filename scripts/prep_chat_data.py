@@ -31,24 +31,18 @@ data/. No HuggingFace libraries needed — files come over plain HTTPS
 import argparse
 import gzip
 import json
-import ssl
 import sys
 import tempfile
 import urllib.error
-import urllib.request
 from pathlib import Path
-
-import certifi
-
-# macOS framework Python ships without system CA certs — use certifi's.
-SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from transformer.chat import END_CONV, encode_conversation, split_conversations
 
-HF = "https://huggingface.co"
+from hf_util import HF, fetch, hf_list
+
 DOLLY_URL = f"{HF}/datasets/databricks/databricks-dolly-15k/resolve/main/databricks-dolly-15k.jsonl"
 OASST1_REPO = "OpenAssistant/oasst1"
 OASST1_FILE = "2023-04-12_oasst_ready.trees.jsonl.gz"
@@ -68,32 +62,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cache-dir", type=Path, default=None,
                    help="Where raw downloads land (default: a temp dir)")
     return p.parse_args()
-
-
-def fetch(url: str, dest: Path) -> Path:
-    """Stream a URL to disk (skips if already cached)."""
-    if dest.exists() and dest.stat().st_size > 0:
-        print(f"  cached: {dest.name}")
-        return dest
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    req = urllib.request.Request(url, headers={"User-Agent": "transformer-learning/1.0"})
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    done = 0
-    with urllib.request.urlopen(req, context=SSL_CTX) as r, open(tmp, "wb") as f:
-        while chunk := r.read(1 << 20):
-            f.write(chunk)
-            done += len(chunk)
-    tmp.replace(dest)
-    print(f"  fetched {dest.name} ({done / 1e6:.1f} MB)")
-    return dest
-
-
-def hf_list(repo: str, subdir: str) -> list[dict]:
-    """List files in a HF dataset repo directory via the public API."""
-    url = f"{HF}/api/datasets/{repo}/tree/main/{subdir}"
-    req = urllib.request.Request(url, headers={"User-Agent": "transformer-learning/1.0"})
-    with urllib.request.urlopen(req, context=SSL_CTX) as r:
-        return json.loads(r.read())
 
 
 def write_corpus(path: Path, conversations: list[bytes]) -> None:
