@@ -292,7 +292,8 @@ def main() -> None:
                       f"lr={lr:.2e}  ({tps:>6.0f} tok/s)  ETA {fmt_eta(eta)}")
                 emit(metrics_f, event="step", step=step, train_loss=loss_val,
                      bpb=loss_val / LN2, lr=lr, grad_norm=float(grad_norm.item()),
-                     tok_per_sec=tps, tokens_seen=tokens_seen, **monitor.summary())
+                     tok_per_sec=tps, tokens_seen=tokens_seen,
+                     moe_layers=monitor.detail(), **monitor.summary())
                 if writer is not None:
                     writer.add_scalar("train/loss", loss_val, step)
                     writer.add_scalar("train/bpb", loss_val / LN2, step)

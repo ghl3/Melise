@@ -558,6 +558,8 @@ def main() -> None:
                     tok_per_sec=tps,
                     tokens_seen=tokens_seen,
                     eta_s=eta,
+                    mem_gb=mem,
+                    moe_layers=monitor.detail(),
                     **monitor.summary(),
                 )
                 if writer is not None:

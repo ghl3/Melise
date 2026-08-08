@@ -358,7 +358,7 @@ class MoEMonitor:
         return hook
 
     def summary(self) -> dict:
-        """Aggregates for metrics.jsonl (per-layer detail goes to TensorBoard)."""
+        """Aggregates for quick scanning of metrics.jsonl."""
         if not self.loads:
             return {}
         max_loads = [float(l.max()) for l in self.loads.values()]
@@ -366,6 +366,22 @@ class MoEMonitor:
         return {
             "moe_max_load": max(max_loads),
             "moe_mean_entropy": sum(entropies) / len(entropies),
+        }
+
+    def detail(self) -> dict | None:
+        """Per-layer stats for metrics.jsonl — metrics.jsonl is the
+        authoritative record, so it must carry everything TensorBoard
+        shows (rebuild_tb.py replays this into moe/L*_ scalars)."""
+        if not self.loads:
+            return None
+        return {
+            name: {
+                "max_load": float(load.max()),
+                "entropy": self.entropy(load),
+                **({"bias_span": self.bias_spans[name]}
+                   if name in self.bias_spans else {}),
+            }
+            for name, load in self.loads.items()
         }
 
     @staticmethod

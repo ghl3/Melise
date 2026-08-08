@@ -224,6 +224,12 @@ def main() -> None:
     if not results:
         raise SystemExit("no checkpoints evaluated")
 
+    # Results live with the run: append to <run>/evals.jsonl so offline
+    # eval history syncs to the bucket alongside the checkpoints.
+    for r in results:
+        with open(Path(r["checkpoint"]).parent / "evals.jsonl", "a") as f:
+            f.write(json.dumps(r) + "\n")
+
     if args.json is not None:
         with open(args.json, "a") as f:
             for r in results:

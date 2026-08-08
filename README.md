@@ -88,6 +88,24 @@ state, RNG streams, best-val tracking, and token count, and are written
 atomically — `--resume <ckpt>` continues the identical run (Ctrl-C saves an
 `interrupted.pt` first).
 
+## Observability
+
+Data flows one way: training runs **push** their run dir to the bucket
+(BucketSync); viewers **read** the bucket — never sync into a tree that
+training is writing (a bucket→local rsync over a live run dir replaces
+growing files under their writers and freezes them; learned the hard way).
+
+- `metrics.jsonl` (one JSON event per line, in every run dir) is the
+  authoritative metric record; TensorBoard event files are a derived view.
+- `scripts/rebuild_tb.py <run-dir>` regenerates `tb/` from metrics.jsonl.
+- `scripts/recover_metrics.py <stdout-log> <run-dir>` reconstructs
+  metrics.jsonl from the run's printed log if it's ever lost.
+- View everything (VM on or off): `tensorboard --logdir gs://<bucket>/runs`
+  — needs `pip install gcsfs` and one-time `gcloud auth application-default
+  login`. The training VM's own TensorBoard serves its local runs live.
+- Offline eval results append to `<run>/evals.jsonl` (eval_checkpoint.py)
+  and sync with the run.
+
 Note: the kimi3 preset's KDA layers use fla's chunkwise Triton kernel on
 CUDA and fall back to a reference sequential scan elsewhere (MPS/CPU), so
 non-CUDA training speed drops with `--seq-len`; 128–256 is comfortable on
