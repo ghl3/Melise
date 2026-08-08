@@ -21,16 +21,18 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 REPO=$(pwd)
 PY=.venv/bin/python
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 # ---- Recipe (override via env) ----
 PRESET="${PRESET:-kimi3}"
 TOKENIZER="${TOKENIZER:-bpe4k}"
 DEVICE="${DEVICE:-cuda}"
-PT_STEPS="${PT_STEPS:-25000}"       # ~800M tokens at batch 16 x seq 2048
-PT_BATCH="${PT_BATCH:-16}"
+PT_STEPS="${PT_STEPS:-33333}"       # ~819M tokens at batch 12 x seq 2048
+PT_BATCH="${PT_BATCH:-12}"          # batch 16 @ seq 2048 fp32 OOMs the 22 GiB L4
 PT_SEQ="${PT_SEQ:-2048}"
 DATA_MIX="${DATA_MIX:-configs/mix-downweight-wiki.json}"
-SFT_STEPS="${SFT_STEPS:-9000}"
+SFT_STEPS="${SFT_STEPS:-12000}"     # 12000 x batch 12 = same examples as 9000 x 16
+SFT_BATCH="${SFT_BATCH:-12}"        # sft.py's own default (16) doesn't fit either
 SFT_SEQ="${SFT_SEQ:-2048}"
 RLVR_STEPS="${RLVR_STEPS:-600}"
 RLVR_LR="${RLVR_LR:-1e-5}"
@@ -59,7 +61,8 @@ PT_DIR=$(newest pretrain)
 if [ "$RESUME_MODE" = 1 ] && stage_live "$PT_DIR"; then
     say "resuming pretrain: $PT_DIR"
     $PY scripts/pretrain.py --resume "$PT_DIR/latest.pt" --steps "$PT_STEPS" \
-        --data-mix "$DATA_MIX" --device "$DEVICE" > ~/pretrain_run.log 2>&1
+        --batch-size "$PT_BATCH" --data-mix "$DATA_MIX" \
+        --device "$DEVICE" > ~/pretrain_run.log 2>&1
 elif [ "$RESUME_MODE" = 1 ] && stage_done "$PT_DIR"; then
     say "pretrain already done: $PT_DIR"
 else
@@ -77,13 +80,14 @@ SFT_DIR=$(newest sft)
 if [ "$RESUME_MODE" = 1 ] && stage_live "$SFT_DIR"; then
     say "resuming sft: $SFT_DIR"
     $PY scripts/sft.py --resume "$SFT_DIR/latest.pt" --steps "$SFT_STEPS" \
-        --device "$DEVICE" > ~/sft_run.log 2>&1
+        --batch-size "$SFT_BATCH" --device "$DEVICE" > ~/sft_run.log 2>&1
 elif [ "$RESUME_MODE" = 1 ] && stage_done "$SFT_DIR"; then
     say "sft already done: $SFT_DIR"
 else
     say "fresh sft from $PT_DIR/best.pt"
     $PY scripts/sft.py --init "$PT_DIR/best.pt" --steps "$SFT_STEPS" \
-        --seq-len "$SFT_SEQ" --device "$DEVICE" > ~/sft_run.log 2>&1
+        --batch-size "$SFT_BATCH" --seq-len "$SFT_SEQ" \
+        --device "$DEVICE" > ~/sft_run.log 2>&1
 fi
 SFT_DIR=$(newest sft)
 say "sft exit $? ($SFT_DIR)"
