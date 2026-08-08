@@ -1,0 +1,8 @@
+# Build context = repo root; only serve.py's needs go into the image.
+*
+!transformer/
+!configs/tokenizer-bpe4k.json
+!scripts/serve.py
+!serve_models/
+transformer/__pycache__/
+transformer/**/__pycache__/

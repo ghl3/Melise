@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+/* Forest palette — deep green ground, warm light ink, moss accent.
+   Semantic tokens only; components never hardcode a hex. */
+@theme {
+  --color-bg: #0c1a11;        /* deepest forest — page ground */
+  --color-glade: #12271a;     /* subtle lift for the header/gradient */
+  --color-panel: #152b1d;     /* cards, assistant bubbles */
+  --color-panel-2: #1c3826;   /* hover / inset fields */
+  --color-line: #2a4a33;      /* borders */
+  --color-ink: #eaf2e6;       /* primary text — warm off-white */
+  --color-dim: #96b09b;       /* secondary text */
+  --color-moss: #85cb8a;      /* accent — buttons, focus, highlights */
+  --color-moss-soft: #b9e0bb; /* accent text on dark */
+  --color-fern: #224a30;      /* user bubble fill */
+  --color-alert: #e8b46a;     /* warnings (truncation, errors) — warm amber */
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: radial-gradient(120% 90% at 50% 0%,
+      var(--color-glade) 0%, var(--color-bg) 55%) fixed;
+  color: var(--color-ink);
+}
+
+/* Streaming caret */
+@keyframes pulse-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.caret::after {
+  content: "▌";
+  color: var(--color-moss);
+  animation: pulse-caret 1s ease-in-out infinite;
+}
+
+::selection {
+  background: var(--color-fern);
+}
