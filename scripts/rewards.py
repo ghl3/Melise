@@ -32,8 +32,15 @@ _WORDS = (
 ).split()
 
 _TOPICS = (
-    "the sea a forest walk your favorite meal a thunderstorm an old house "
-    "a long journey the night sky a small victory a quiet morning"
+    "the sea", "a forest walk", "your favorite meal", "a thunderstorm",
+    "an old house", "a long journey", "the night sky", "a small victory",
+    "a quiet morning", "a city street",
+)
+
+# Word bank for building exactly-N-word canonical answers (words task).
+_FILLER = (
+    "it feels calm and bright there somehow quietly holding small "
+    "moments that drift past slowly like light on water"
 ).split()
 
 _FIRST_INT = re.compile(r"-?\d+")
@@ -41,8 +48,14 @@ _FIRST_INT = re.compile(r"-?\d+")
 
 @dataclass
 class Task:
+    """A prompt, its deterministic scorer, and one canonical full-credit
+    answer. `answer` is what cold-start SFT data trains toward
+    (scripts/gen_task_sft.py) — keeping it on the Task guarantees the
+    SFT target and the RL scorer can never drift apart."""
+
     kind: str
     prompt: str
+    answer: str
     score: Callable[[str], float] = field(repr=False)
 
 
@@ -59,7 +72,7 @@ def make_copy(rng: random.Random) -> Task:
         if text.strip() == phrase:
             return 1.0
         return 0.5 * difflib.SequenceMatcher(None, text.strip(), phrase).ratio()
-    return Task("copy", f'Repeat exactly: {phrase}', score)
+    return Task("copy", f'Repeat exactly: {phrase}', phrase, score)
 
 
 def make_arith(rng: random.Random) -> Task:
@@ -71,7 +84,8 @@ def make_arith(rng: random.Random) -> Task:
     else:
         a, b = max(a, b), min(a, b)
         prompt, answer = f"What is {a} - {b}?", a - b
-    return Task("arith", prompt, lambda t: float(_first_int(t) == answer))
+    return Task("arith", prompt, str(answer),
+                lambda t: float(_first_int(t) == answer))
 
 
 def make_parity(rng: random.Random) -> Task:
@@ -83,7 +97,8 @@ def make_parity(rng: random.Random) -> Task:
         t = text.strip().lower()
         # Saying both words (or the wrong one) scores nothing.
         return float(answer in t and wrong not in t.replace(answer, "", 1))
-    return Task("parity", f"Is {n} even or odd? Answer with one word.", score)
+    return Task("parity", f"Is {n} even or odd? Answer with one word.",
+                answer.capitalize(), score)
 
 
 def make_count_letter(rng: random.Random) -> Task:
@@ -95,6 +110,7 @@ def make_count_letter(rng: random.Random) -> Task:
     return Task(
         "count",
         f"How many times does the letter '{letter}' appear in '{word}'?",
+        str(answer),
         lambda t: float(_first_int(t) == answer),
     )
 
@@ -104,10 +120,15 @@ def make_word_count(rng: random.Random) -> Task:
     scored (linear partial credit)."""
     n = rng.randint(3, 8)
     topic = rng.choice(_TOPICS)
+    # Canonical answer: topic words first, filler to exactly n words.
+    base = topic.split()[-1:] if n <= 3 else topic.split()
+    pool = [w for w in _FILLER if w not in base]
+    words = (base + rng.sample(pool, max(n - len(base), 0)))[:n]
+    canonical = " ".join(words).capitalize().rstrip(",") + "."
     def score(text: str) -> float:
         k = len(text.split())
         return max(0.0, 1.0 - abs(k - n) / n) if k else 0.0
-    return Task("words", f"Describe {topic} in exactly {n} words.", score)
+    return Task("words", f"Describe {topic} in exactly {n} words.", canonical, score)
 
 
 TASKS: dict[str, Callable[[random.Random], Task]] = {
