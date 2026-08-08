@@ -65,9 +65,9 @@ from transformer.rl import (
 from run_utils import (
     BucketSync,
     Tee,
+    derive_run_name,
     emit,
     fmt_eta,
-    generate_run_name,
     open_metrics_log,
     prune_old_checkpoints,
     save_checkpoint,
@@ -174,7 +174,8 @@ def main() -> None:
     if args.out is not None:
         out_dir = args.out
     elif args.resume is None:
-        name = args.run_name or f"rlvr-{generate_run_name(preset, model.num_parameters())}"
+        name = args.run_name or derive_run_name(
+            "rlvr", init_path, preset, model.num_parameters())
         out_dir = (PROJECT_ROOT / "checkpoints" / "rlvr" / name).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 

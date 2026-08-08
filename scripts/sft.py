@@ -58,9 +58,9 @@ from run_utils import (
     BucketSync,
     MoEMonitor,
     Tee,
+    derive_run_name,
     emit,
     fmt_eta,
-    generate_run_name,
     lr_at,
     open_metrics_log,
     prune_old_checkpoints,
@@ -168,7 +168,8 @@ def main() -> None:
     elif args.resume is not None:
         out_dir = args.resume.parent.resolve()
     else:
-        name = args.run_name or f"sft-{generate_run_name(preset, model.num_parameters())}"
+        name = args.run_name or derive_run_name(
+            "sft", args.init, preset, model.num_parameters())
         out_dir = (PROJECT_ROOT / "checkpoints" / "sft" / name).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 

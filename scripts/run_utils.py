@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 import shutil
 import subprocess
 from datetime import datetime
@@ -65,6 +66,33 @@ def generate_run_name(preset: str, n_params: int) -> str:
     noun = rng.choice(_NOUNS)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"{preset}-{fmt_params(n_params)}-{adj}-{noun}-{ts}"
+
+
+_TS_SUFFIX = re.compile(r"-\d{8}-\d{6}$")
+
+
+def derive_run_name(stage: str, init_path: Path, preset: str, n_params: int) -> str:
+    """Run name for a derived stage, keeping the ancestor's identity so
+    lineage is readable in TensorBoard and checkpoint paths:
+
+        sft  from pretrain/kimi3-small-17M-scarlet-harbor-<ts>/best.pt
+             -> sft-kimi3-small-17M-scarlet-harbor-<new ts>
+        rlvr from sft/sft-kimi3-small-17M-scarlet-harbor-<ts>/best.pt
+             -> rlvr-kimi3-small-17M-scarlet-harbor-<new ts>
+
+    The base run's adjective-noun name threads through the whole chain;
+    timestamps distinguish repeat attempts (exact parentage is always in
+    run.json's "init"). Falls back to a fresh generate_run_name when the
+    parent dir doesn't follow the naming scheme."""
+    parent = init_path.resolve().parent.name
+    for prefix in ("sft-", "rlvr-", "grpo-"):
+        if parent.startswith(prefix):
+            parent = parent[len(prefix):]
+    identity = _TS_SUFFIX.sub("", parent)
+    if not identity:
+        return f"{stage}-{generate_run_name(preset, n_params)}"
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{stage}-{identity}-{ts}"
 
 
 # ---------- Console/formatting ----------
