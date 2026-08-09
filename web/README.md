@@ -1,7 +1,7 @@
-# forest chat
+# flora
 
 Next.js + TypeScript + Tailwind chat UI for the repo's trained
-checkpoints. Deep-forest theme. The browser talks only to the two API
+checkpoints. Forest-on-cream theme. The browser talks only to the two API
 routes here; they proxy to the inference worker (`scripts/serve.py`)
 using `MODEL_SERVER_URL` / `MODEL_SERVER_TOKEN` from server-side env.
 

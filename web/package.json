@@ -1,5 +1,5 @@
 {
-  "name": "transformer-learning-chat",
+  "name": "flora",
   "private": true,
   "scripts": {
     "dev": "next dev",
