@@ -168,6 +168,10 @@ def main() -> None:
     model = build_model(cfg).to(device)
     model.load_state_dict(ckpt["model"])
     tok = load_tokenizer(getattr(cfg, "tokenizer", "bytes"))
+    # Per-token-id byte lengths: bpb below = bits per assistant BYTE,
+    # comparable across tokenizers (all-ones for byte models).
+    byte_lens = torch.tensor(tok.byte_lengths(), dtype=torch.float32,
+                             device=device)
 
     if args.out is not None:
         out_dir = args.out
@@ -314,43 +318,47 @@ def main() -> None:
                 tps = n_done * args.batch_size * args.seq_len / elapsed
                 eta = (elapsed / n_done) * (args.steps - step)
                 loss_val = float(loss.item())
+                n_masked = int(mask.sum().item())
+                train_bpb = (loss_val * n_masked / LN2
+                             / max(float(byte_lens[targets[mask]].sum()), 1.0))
                 print(f"step {step:>5}/{args.steps}  sft_loss={loss_val:.4f}  "
-                      f"bpb={loss_val / LN2:.3f}  grad_norm={float(grad_norm.item()):.2f}  "
+                      f"bpb={train_bpb:.3f}  grad_norm={float(grad_norm.item()):.2f}  "
                       f"lr={lr:.2e}  ({tps:>6.0f} tok/s)  ETA {fmt_eta(eta)}")
                 emit(metrics_f, event="step", step=step, train_loss=loss_val,
-                     bpb=loss_val / LN2, lr=lr, grad_norm=float(grad_norm.item()),
+                     bpb=train_bpb, lr=lr, grad_norm=float(grad_norm.item()),
                      tok_per_sec=tps, tokens_seen=tokens_seen,
                      moe_layers=monitor.detail(), **monitor.summary())
                 if writer is not None:
                     writer.add_scalar("train/loss", loss_val, step)
-                    writer.add_scalar("train/bpb", loss_val / LN2, step)
+                    writer.add_scalar("train/bpb", train_bpb, step)
                     writer.add_scalar("train/lr", lr, step)
                     writer.add_scalar("train/grad_norm", float(grad_norm.item()), step)
 
             if step % args.eval_every == 0:
-                val = masked_conversation_loss(model, val_convs, args.batch_size,
-                                               args.seq_len, args.eval_batches,
-                                               device, tok=tok)
-                val_tasks = (masked_conversation_loss(
-                    model, val_tasks_convs, args.batch_size, args.seq_len, 4,
-                    device, tok=tok) if val_tasks_convs else None)
+                val, val_bpb = masked_conversation_loss(
+                    model, val_convs, args.batch_size, args.seq_len,
+                    args.eval_batches, device, tok=tok, byte_lens=byte_lens)
+                tasks_bpb = None
+                if val_tasks_convs:
+                    _, tasks_bpb = masked_conversation_loss(
+                        model, val_tasks_convs, args.batch_size, args.seq_len,
+                        4, device, tok=tok, byte_lens=byte_lens)
                 is_best = val < best_val
                 if is_best:
                     best_val, best_step = val, step
                     full_save(out_dir / "best.pt", step)
-                tasks_str = (f"  tasks_bpb={val_tasks / LN2:.3f}"
-                             if val_tasks is not None else "")
-                print(f"        val_loss={val:.4f}  val_bpb={val / LN2:.3f}"
+                tasks_str = (f"  tasks_bpb={tasks_bpb:.3f}"
+                             if tasks_bpb is not None else "")
+                print(f"        val_loss={val:.4f}  val_bpb={val_bpb:.3f}"
                       f"{tasks_str}" + ("  ← best" if is_best else ""))
                 emit(metrics_f, event="eval", step=step, val_loss=val,
-                     val_bpb=val / LN2,
-                     val_tasks_bpb=val_tasks / LN2 if val_tasks is not None else None,
+                     val_bpb=val_bpb, val_tasks_bpb=tasks_bpb,
                      tokens_seen=tokens_seen, is_best=is_best)
                 if writer is not None:
                     writer.add_scalar("val/loss", val, step)
-                    writer.add_scalar("val/bpb", val / LN2, step)
-                    if val_tasks is not None:
-                        writer.add_scalar("val/tasks_bpb", val_tasks / LN2, step)
+                    writer.add_scalar("val/bpb", val_bpb, step)
+                    if tasks_bpb is not None:
+                        writer.add_scalar("val/tasks_bpb", tasks_bpb, step)
                     writer.flush()
                 sync.kick()
 

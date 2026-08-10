@@ -78,16 +78,21 @@ def slice_nll(model, data: torch.Tensor, seq_len: int, batch_size: int,
 
 @torch.no_grad()
 def sampled_val_loss(model, val_datasets, weights, batch_size: int,
-                     seq_len: int, n_batches: int) -> float:
-    """Pretraining validation: mean cross-entropy over randomly sampled
-    windows from the val slices (fast, approximate — the training-loop
-    eval). For exact numbers use slice_nll."""
+                     seq_len: int, n_batches: int,
+                     byte_lens=None) -> tuple[float, float]:
+    """Pretraining validation: (mean loss nats/token, bpb) over randomly
+    sampled windows from the val slices (fast, approximate — the
+    training-loop eval). bpb divides bits by the targets' RAW byte
+    count via `byte_lens` (a per-token-id byte-length tensor), so the
+    number is bits-per-byte under any tokenizer; without byte_lens it
+    falls back to per-token bits (only honest for byte models). For
+    exact numbers use slice_nll."""
     from .data import get_batch
 
     was_training = model.training
     model.eval()
     try:
-        total = 0.0
+        total, bits, n_bytes = 0.0, 0.0, 0.0
         for _ in range(n_batches):
             inputs, targets = get_batch(val_datasets, weights, batch_size, seq_len)
             logits = model(inputs)
@@ -95,7 +100,10 @@ def sampled_val_loss(model, val_datasets, weights, batch_size: int,
                 logits.view(-1, model.cfg.vocab_size), targets.view(-1)
             )
             total += loss.item()
-        return total / n_batches
+            bits += loss.item() * targets.numel() / LN2
+            n_bytes += (float(byte_lens[targets].sum()) if byte_lens is not None
+                        else targets.numel())
+        return total / n_batches, bits / n_bytes
     finally:
         if was_training:
             model.train()
@@ -103,13 +111,17 @@ def sampled_val_loss(model, val_datasets, weights, batch_size: int,
 
 @torch.no_grad()
 def masked_conversation_loss(model, val_convs, batch_size: int, seq_len: int,
-                             n_batches: int, device, tok=None) -> float:
-    """Deterministic masked loss over a fixed prefix of the val set
-    (nats per assistant token)."""
+                             n_batches: int, device, tok=None,
+                             byte_lens=None) -> tuple[float, float]:
+    """Deterministic masked loss over a fixed prefix of the val set:
+    (nats per assistant token, bits per assistant BYTE). The byte
+    normalization uses `byte_lens` (per-token-id raw byte lengths) so
+    the bpb number is tokenizer-independent; without it the second
+    value is per-token bits (honest for byte models only)."""
     was_training = model.training
     model.eval()
     try:
-        total, count = 0.0, 0
+        total, count, n_bytes = 0.0, 0, 0.0
         for b in range(n_batches):
             idx = list(range(b * batch_size, min((b + 1) * batch_size, len(val_convs))))
             if not idx:
@@ -120,7 +132,9 @@ def masked_conversation_loss(model, val_convs, batch_size: int, seq_len: int,
             nll = F.cross_entropy(logits[mask], targets[mask], reduction="sum")
             total += float(nll.item())
             count += int(mask.sum().item())
-        return total / max(count, 1)
+            n_bytes += (float(byte_lens[targets[mask]].sum())
+                        if byte_lens is not None else int(mask.sum().item()))
+        return total / max(count, 1), total / LN2 / max(n_bytes, 1.0)
     finally:
         if was_training:
             model.train()

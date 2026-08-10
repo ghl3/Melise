@@ -352,6 +352,12 @@ def main() -> None:
                          vocab_size=_tok.vocab_size, tokenizer=_tok.name)
         model = model_cls(cfg).to(device)
     tok = load_tokenizer(getattr(cfg, "tokenizer", "bytes"))
+    # Per-token-id byte lengths: every logged bpb below divides bits by
+    # RAW BYTES, so curves are comparable across tokenizers and to the
+    # enwik8 literature. (For byte models this table is all ones and
+    # numbers are identical to the old per-token logging.)
+    byte_lens = torch.tensor(tok.byte_lengths(), dtype=torch.float32,
+                             device=device)
 
     out_dir = resolve_run_dir(args, preset, model.num_parameters())
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -568,9 +574,14 @@ def main() -> None:
                 loss_val = float(loss.item())
                 gnorm = float(grad_norm.item())
                 mem = device_mem_gb(device)
+                train_bpb = (loss_val * targets.numel() / LN2
+                             / float(byte_lens[targets].sum()))
+                with torch.no_grad():  # confidence proxy: mean prediction entropy (bits)
+                    logp = F.log_softmax(logits.detach().float(), dim=-1)
+                    ent = float((-logp.exp() * logp).sum(-1).mean()) / LN2
                 print(
                     f"step {step:>5}/{args.steps}  train_loss={loss_val:.4f}  "
-                    f"bpb={loss_val / LN2:.3f}  grad_norm={gnorm:.2f}  "
+                    f"bpb={train_bpb:.3f}  ent={ent:.2f}  grad_norm={gnorm:.2f}  "
                     f"lr={lr:.2e}  ({tps:>6.0f} tok/s)  ETA {fmt_eta(eta)}"
                 )
                 emit(
@@ -578,7 +589,8 @@ def main() -> None:
                     event="step",
                     step=step,
                     train_loss=loss_val,
-                    bpb=loss_val / LN2,
+                    bpb=train_bpb,
+                    entropy_bits=ent,
                     lr=lr,
                     grad_norm=gnorm,
                     tok_per_sec=tps,
@@ -590,7 +602,8 @@ def main() -> None:
                 )
                 if writer is not None:
                     writer.add_scalar("train/loss", loss_val, step)
-                    writer.add_scalar("train/bpb", loss_val / LN2, step)
+                    writer.add_scalar("train/bpb", train_bpb, step)
+                    writer.add_scalar("train/entropy_bits", ent, step)
                     writer.add_scalar("train/lr", lr, step)
                     writer.add_scalar("train/grad_norm", gnorm, step)
                     writer.add_scalar("train/tok_per_sec", tps, step)
@@ -604,13 +617,14 @@ def main() -> None:
                         writer.add_scalar(f"moe/{name}_bias_span", span, step)
 
             if step % args.eval_every == 0 and val_weights is not None:
-                val = sampled_val_loss(
+                val, val_bpb = sampled_val_loss(
                     model,
                     val_data,
                     val_weights,
                     args.batch_size,
                     args.seq_len,
                     args.eval_batches,
+                    byte_lens=byte_lens,
                 )
                 is_best = val < best_val
                 if is_best:
@@ -620,24 +634,42 @@ def main() -> None:
                     # new best — no eval-vs-save alignment gap.
                     full_save(out_dir / "best.pt", step)
                 pnorm = global_param_norm(model)
+                # Per-domain val: every file that defines a val slice gets
+                # its own number — on long runs this is how you see e.g.
+                # whether the dialogue register is actually being learned.
+                domain_bpb = {}
+                for path, vd in zip(args.data, val_data):
+                    if vd is not None and len(vd) > args.seq_len:
+                        _, d_bpb = sampled_val_loss(
+                            model, [vd], torch.tensor([1.0]),
+                            args.batch_size, args.seq_len,
+                            max(2, args.eval_batches // 4),
+                            byte_lens=byte_lens)
+                        domain_bpb[Path(path).stem] = round(d_bpb, 4)
                 print(
-                    f"        val_loss={val:.4f}  val_bpb={val / LN2:.3f}"
+                    f"        val_loss={val:.4f}  val_bpb={val_bpb:.3f}"
                     + ("  ← best" if is_best else "")
+                    + ("  [" + "  ".join(f"{k}={v:.3f}"
+                                         for k, v in domain_bpb.items()) + "]"
+                       if len(domain_bpb) > 1 else "")
                 )
                 emit(
                     metrics_f,
                     event="eval",
                     step=step,
                     val_loss=val,
-                    val_bpb=val / LN2,
+                    val_bpb=val_bpb,
+                    domain_bpb=domain_bpb,
                     tokens_seen=tokens_seen,
                     param_norm=pnorm,
                     is_best=is_best,
                 )
                 if writer is not None:
                     writer.add_scalar("val/loss", val, step)
-                    writer.add_scalar("val/bpb", val / LN2, step)
+                    writer.add_scalar("val/bpb", val_bpb, step)
                     writer.add_scalar("val/best", best_val, step)
+                    for name, v in domain_bpb.items():
+                        writer.add_scalar(f"val_domain/{name}", v, step)
                     writer.add_scalar("params/global_norm", pnorm, step)
                     writer.flush()
                 sync.kick()

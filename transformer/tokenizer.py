@@ -55,6 +55,11 @@ class ByteTokenizer:
         return bytes(i for i in ids if i not in _SPECIAL_IDS and 0 <= i < 256) \
             .decode("utf-8", errors="replace")
 
+    def byte_lengths(self) -> list[int]:
+        """Raw byte length per token id — the bpb denominators. Every
+        byte token is exactly one byte."""
+        return [1] * 256
+
 
 class BPETokenizer:
     """A trained byte-level BPE artifact (scripts/train_tokenizer.py)."""
@@ -80,6 +85,13 @@ class BPETokenizer:
         return self._tok.decode(
             [i for i in ids if i not in _SPECIAL_IDS], skip_special_tokens=True
         )
+
+    def byte_lengths(self) -> list[int]:
+        """Raw byte length per token id. ByteLevel vocab strings use one
+        character per underlying byte, so the char count IS the byte
+        count — this makes logged bpb exact, not estimated."""
+        return [max(1, len(self._tok.id_to_token(i) or ""))
+                for i in range(self.vocab_size)]
 
 
 def load_tokenizer(name: str | None):

@@ -12,6 +12,9 @@
     "data/dialogue_daily.txt": 0.3
   },
   "splits": {
-    "data/enwik8.txt": {"train": 0.9, "val": 0.05, "test": 0.05}
+    "data/enwik8.txt": {"train": 0.9, "val": 0.05, "test": 0.05},
+    "data/fineweb_edu.txt": {"train": 0.995, "val": 0.005},
+    "data/dialogue_movies.txt": {"train": 0.99, "val": 0.01},
+    "data/war_and_peace.txt": {"train": 0.99, "val": 0.01}
   }
 }
