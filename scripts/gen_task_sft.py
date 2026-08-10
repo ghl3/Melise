@@ -37,6 +37,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from transformer.chat import encode_conversation
 from transformer.rl import TASKS
+from transformer.rl.tasks import _NAMES as _TASK_NAMES
 
 def main() -> None:
     p = argparse.ArgumentParser(
@@ -60,8 +61,14 @@ def main() -> None:
             f"canonical answer scores {got:.2f} for {task.kind}: "
             f"{task.prompt!r} -> {task.answer!r}"
         )
+        # Half the examples carry a system preamble so task behavior is
+        # robust with and without it (rollouts and serving use one).
+        bot = "Lily" if rng.random() < 0.5 else rng.choice(_TASK_NAMES)
+        preamble = (f"You are {bot}, a tiny language model."
+                    if rng.random() < 0.5 else None)
         convs.append(encode_conversation(
-            [("user", task.prompt), ("assistant", task.answer)]))
+            [("user", task.prompt), ("assistant", task.answer)],
+            preamble=preamble))
         kinds[task.kind] += 1
 
     blob = b"".join(convs)

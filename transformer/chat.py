@@ -28,6 +28,13 @@ ASSISTANT = 0x02
 END_TURN = 0x03
 END_CONV = 0x04
 
+# The deployed system preamble: plain text BEFORE the first user marker
+# (no extra control byte — nothing to re-pin in tokenizers). Training
+# data varies the name ("You are {name}, …") so the model learns to
+# READ its identity from the preamble rather than memorize one string;
+# serving and RL rollouts use this canonical form.
+DEFAULT_PREAMBLE = "You are Lily, a tiny language model."
+
 # Strip every C0 control byte except \t \n \r from dataset text so the
 # markers above stay unambiguous (and stray terminal-control junk dies).
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -37,9 +44,13 @@ def sanitize(text: str) -> str:
     return _CONTROL.sub("", text)
 
 
-def encode_conversation(turns: list[tuple[str, str]]) -> bytes:
-    """turns: [(role, text), ...] with role 'user' or 'assistant'."""
+def encode_conversation(turns: list[tuple[str, str]],
+                        preamble: str | None = None) -> bytes:
+    """turns: [(role, text), ...] with role 'user' or 'assistant'.
+    An optional preamble is plain text before the first marker."""
     out = bytearray()
+    if preamble:
+        out += sanitize(preamble).strip().encode("utf-8")
     for role, text in turns:
         out.append(USER if role == "user" else ASSISTANT)
         out += sanitize(text).strip().encode("utf-8")
@@ -134,9 +145,20 @@ def completion_text(raw: bytes) -> str:
 # parsed out of content (encode() strips the characters that spell them).
 
 
+def preamble_of(conv: bytes) -> bytes:
+    """Plain-text bytes before the first role marker (b'' if none)."""
+    for i, b in enumerate(conv):
+        if b in (USER, ASSISTANT):
+            return conv[:i]
+    return b""
+
+
 def encode_ids(conv: bytes, tok) -> list[int]:
-    """A stored byte-template conversation -> token ids."""
+    """A stored byte-template conversation -> token ids. Preamble text
+    before the first marker is preserved (parse_turns alone drops it)."""
     ids = []
+    if head := preamble_of(conv):
+        ids.extend(tok.encode(head))
     for role, content in parse_turns(conv):
         ids.append(tok.user_id if role == "user" else tok.assistant_id)
         ids.extend(tok.encode(content))
@@ -167,8 +189,10 @@ def assistant_mask_ids(ids: list[int], tok) -> list[bool]:
     return mask
 
 
-def make_prompt_ids(user_text: str, tok) -> list[int]:
-    """Generation prompt: user turn + assistant marker, as token ids.
-    Decoding should stop at tok.end_turn_id."""
-    return ([tok.user_id] + tok.encode(sanitize(user_text).strip())
+def make_prompt_ids(user_text: str, tok,
+                    preamble: str | None = None) -> list[int]:
+    """Generation prompt: [preamble] + user turn + assistant marker, as
+    token ids. Decoding should stop at tok.end_turn_id."""
+    head = tok.encode(sanitize(preamble).strip()) if preamble else []
+    return (head + [tok.user_id] + tok.encode(sanitize(user_text).strip())
             + [tok.end_turn_id, tok.assistant_id])

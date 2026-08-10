@@ -50,7 +50,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import torch
 
 from transformer import build_model
-from transformer.chat import make_prompt_ids
+from transformer.chat import DEFAULT_PREAMBLE, make_prompt_ids
 from transformer.tokenizer import load_tokenizer
 from transformer.rl import (
     TASKS,
@@ -282,7 +282,10 @@ def main() -> None:
             # decode several whole groups per forward pass. seqs is
             # indexed (pi·G + gi) to match the advantage flatten order.
             G = args.group_size
-            prompts = [make_prompt_ids(t.prompt, tok) for t in tasks]
+            # Rollouts carry the deployed preamble so RL optimizes the
+            # same distribution serving uses.
+            prompts = [make_prompt_ids(t.prompt, tok, preamble=DEFAULT_PREAMBLE)
+                       for t in tasks]
             seqs = [None] * (len(tasks) * G)
             rewards_pg = torch.zeros(len(tasks), G)
             kind_scores = defaultdict(list)

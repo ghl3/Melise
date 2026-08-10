@@ -31,7 +31,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from transformer.chat import encode_conversation
 from transformer.rl.tasks import _NAMES
 
-def build_bank(bot: str) -> dict[str, tuple[list[str], list[str]]]:
+def build_bank(bot: str, size: str) -> dict[str, tuple[list[str], list[str]]]:
     """category -> (question templates, answer templates)."""
     return {
         "name": (
@@ -53,9 +53,9 @@ def build_bank(bot: str) -> dict[str, tuple[list[str], list[str]]]:
         "size": (
             ["How big are you?", "How many parameters do you have?",
              "Are you a large language model?"],
-            ["I'm tiny — about 19 million parameters.",
-             "Very small: around 19 million parameters, trained from scratch.",
-             "I'm a small model, about 19 million parameters."],
+            [f"I'm tiny — about {size} parameters.",
+             f"Very small: around {size} parameters, trained from scratch.",
+             f"I'm a small model, about {size} parameters."],
         ),
         "origin": (
             ["Who made you?", "Who trained you?", "Where do you come from?",
@@ -95,6 +95,9 @@ def main() -> None:
     )
     p.add_argument("--name", type=str, default="Lily",
                    help="Assistant persona name")
+    p.add_argument("--params", type=str, default="74 million",
+                   help="Parameter count mentioned in size answers "
+                        "(gen-3 medium: 74 million)")
     p.add_argument("--n", type=int, default=3000, help="Total examples")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", type=Path,
@@ -102,20 +105,27 @@ def main() -> None:
     args = p.parse_args()
 
     rng = random.Random(args.seed)
-    bank = build_bank(args.name)
     greets = ["Hi!", "Hello!", "Hey there!", "Good morning!"]
     convs, kinds = [], Counter()
     for _ in range(args.n):
+        # Vary the assistant's name and include a preamble on most
+        # examples: the model should learn to READ its identity from
+        # "You are {name}, …" (conditioning, like the recall task), not
+        # memorize one name — this survives site renames.
+        bot = args.name if rng.random() < 0.6 else rng.choice(_NAMES)
+        preamble = (f"You are {bot}, a tiny language model."
+                    if rng.random() < 0.7 else None)
+        bank = build_bank(bot, args.params)
         kind = rng.choice(sorted(bank) + ["intro-recall"])
         if kind == "intro-recall":
-            user = rng.choice(_NAMES)
+            user = rng.choice([n for n in _NAMES if n != bot])
             turns = [
                 ("user", rng.choice([f"Hi, I'm {user}!",
                                      f"Hello, my name is {user}.",
                                      f"Hey! {user} here."])),
                 ("assistant", rng.choice([f"Nice to meet you, {user}! "
-                                          f"I'm {args.name}.",
-                                          f"Hello {user}! I'm {args.name}.",
+                                          f"I'm {bot}.",
+                                          f"Hello {user}! I'm {bot}.",
                                           f"Hi {user}!"])),
                 ("user", rng.choice(["What is my name?", "What's my name?",
                                      "Do you remember my name?"])),
@@ -128,7 +138,7 @@ def main() -> None:
                 turns = [("user", rng.choice(greets)),
                          ("assistant", "Hello! How can I help you today?"),
                          *turns]
-        convs.append(encode_conversation(turns))
+        convs.append(encode_conversation(turns, preamble=preamble))
         kinds[kind] += 1
 
     blob = b"".join(convs)

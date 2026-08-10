@@ -54,6 +54,7 @@ MODELS: dict[str, dict] = {}  # name -> {model, tok, cfg, stage, params}
 DEVICE = "cpu"
 MAX_NEW_CAP = 512
 MAX_SECONDS = 120.0  # wall-clock cap per generation
+PREAMBLE = ""  # --preamble; only for models TRAINED with one (gen-3+)
 _busy = threading.Semaphore(1)  # batch-1 server: one generation at a time
 
 
@@ -88,15 +89,18 @@ def discover_models() -> dict[str, Path]:
 
 # ---------- prompt assembly ----------
 
-def conversation_ids(messages: list[dict], tok, ctx: int, reserve: int):
+def conversation_ids(messages: list[dict], tok, ctx: int, reserve: int,
+                     preamble: str = ""):
     """Chat-template token ids ending with the assistant marker. Drops
     oldest turns (never the final user turn) until the prompt leaves
-    `reserve` tokens of reply budget inside `ctx`."""
+    `reserve` tokens of reply budget inside `ctx`. The preamble (plain
+    text before the first marker) survives turn-dropping."""
+    head = tok.encode(sanitize(preamble).strip()) if preamble else []
     turns = [(m["role"], tok.encode(sanitize(m["content"]).strip()))
              for m in messages]
     dropped = 0
     while True:
-        ids = []
+        ids = list(head)
         for role, content in turns:
             ids.append(tok.user_id if role == "user" else tok.assistant_id)
             ids.extend(content)
@@ -205,7 +209,7 @@ def chat(req: ChatRequest):
     max_new = min(req.max_tokens, MAX_NEW_CAP)
     ids, dropped = conversation_ids(
         [m.model_dump() for m in req.messages], entry["tok"],
-        entry["cfg"].max_seq_len, reserve=max_new)
+        entry["cfg"].max_seq_len, reserve=max_new, preamble=PREAMBLE)
     max_new = min(max_new, entry["cfg"].max_seq_len - len(ids))
     if max_new < 1:
         raise HTTPException(400, "conversation does not fit the model context")
@@ -273,10 +277,16 @@ def main():
                    help="hard cap on tokens per completion")
     p.add_argument("--max-seconds", type=float, default=120.0,
                    help="wall-clock cap per generation")
+    p.add_argument("--preamble", type=str, default="",
+                   help="system preamble prepended to every prompt — use "
+                        "transformer.chat.DEFAULT_PREAMBLE for models "
+                        "trained with one (gen-3+); leave empty for older "
+                        "checkpoints, which never saw preambles")
     args = p.parse_args()
 
-    global DEVICE, MAX_NEW_CAP, MAX_SECONDS
+    global DEVICE, MAX_NEW_CAP, MAX_SECONDS, PREAMBLE
     DEVICE, MAX_NEW_CAP, MAX_SECONDS = args.device, args.max_new, args.max_seconds
+    PREAMBLE = args.preamble
 
     if args.model:
         wanted = {}

@@ -186,6 +186,28 @@ def test_weighted_task_sampling():
     assert abs(uniform.count("copy") - 100) < 40  # no-weights path stays uniform
 
 
+def test_preamble_encoding():
+    from transformer.chat import (assistant_mask_ids, encode_conversation,
+                                  encode_ids, make_prompt_ids, preamble_of)
+    from transformer.tokenizer import ByteTokenizer
+    tok = ByteTokenizer()
+    pre = "You are X."
+    conv = encode_conversation([("user", "hi"), ("assistant", "yo")],
+                               preamble=pre)
+    assert preamble_of(conv) == pre.encode()
+    ids = encode_ids(conv, tok)
+    n = len(pre)
+    assert ids[:n] == list(pre.encode())      # preamble survives encode_ids
+    assert ids[n] == tok.user_id
+    assert not any(assistant_mask_ids(ids, tok)[:n + 1])  # never a target
+    pid = make_prompt_ids("hi", tok, preamble=pre)
+    assert pid[:n] == list(pre.encode()) and pid[n] == tok.user_id
+    # Back-compat: no preamble -> identical to the old layout.
+    plain = encode_conversation([("user", "hi"), ("assistant", "yo")])
+    assert preamble_of(plain) == b""
+    assert encode_ids(plain, tok)[0] == tok.user_id
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

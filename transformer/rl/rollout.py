@@ -14,7 +14,7 @@ from collections import defaultdict
 import torch
 import torch.nn.functional as F
 
-from ..chat import END_TURN, make_prompt_ids
+from ..chat import DEFAULT_PREAMBLE, END_TURN, make_prompt_ids
 from ..tokenizer import ByteTokenizer
 from .tasks import sample_tasks
 
@@ -102,7 +102,9 @@ def eval_rewards(model, task_names, n_prompts: int, seed, max_new: int, device,
         by_kind = defaultdict(list)
         for task in tasks:
             comps, _, _ = rollout_group(
-                model, make_prompt_ids(task.prompt, tok), 1, max_new, 1.0,
+                model,
+                make_prompt_ids(task.prompt, tok, preamble=DEFAULT_PREAMBLE),
+                1, max_new, 1.0,
                 device, greedy=True, stop_id=tok.end_turn_id,
             )
             text = tok.decode(comps[0]).strip()
