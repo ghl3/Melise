@@ -10,7 +10,7 @@ register; d=384 over 512 for the ~4.5-day budget).
 
 | knob | value | why |
 |---|---|---|
-| model | **kimi3-medium** — d=384, 13 attn layers, 12 heads (head_dim 32), 24 experts top-4 | balanced width+depth via K3 shape rules; ~74.2M params with the 8k vocab |
+| model | **kimi3-medium** — d=384, 13 attn layers, 12 heads (head_dim 32), 24 experts top-4 | balanced width+depth via K3 shape rules; **72.0M params** measured with the 8k vocab (145k steps ≈ 20.6 tok/param) |
 | tokenizer | **bpe8k** (8192, digit-isolated, specials pinned 0–4) | 8–12% fewer tokens/byte than bpe4k (enwik8 2.95 B/tok); trained on the gen-3 corpus |
 | context | 2048 | chat needs no more; memory feeds batch instead |
 | pretrain | **145,000 steps × batch 5 × 2048 ≈ 1.48B tokens** (Chinchilla for 74M) | b5 probed: peak 20.1/22.5 GiB @ 4,098 tok/s (b6 OOMs, b4 wastes throughput) |
@@ -55,6 +55,20 @@ register; d=384 over 512 for the ~4.5-day budget).
 
 - Estimated wall-clock: pretrain ~4.2d + SFT ~14h + tail ~1h +
   GRPO ~6h + evals ≈ **5.3 days**; ~$40 Spot.
+
+## Pre-launch validation (2026-08-10)
+
+Toy full-pipeline run on the VM (30/20/10/3 steps, real
+preset/tokenizer/batch): every stage transition green — pretrain →
+SFT → tail (first execution) → GRPO (recall + weighted sampling +
+paraphrase prompts + preamble confirmed in rollout logs) → evals
+(missing toy rlvr best.pt skipped gracefully) → DONE_CMD executed.
+Peak memory across stages **21.3 GiB / 22.5** (worst at GRPO:
+policy + frozen reference + rollout caches). bpe8k token cache for
+the full mix is pre-warmed (43 cache entries), so the real run
+starts stepping immediately. Three bugs found and fixed by the
+validation itself: boot-resume firing on pre-launch boots, bare
+`--resume` losing the recipe env, and untunable SFT eval cadence.
 
 ## Reference numbers to beat (gen-2)
 
