@@ -141,6 +141,10 @@ Scoring quirks that exist on purpose:
 
 ## Housekeeping
 
+- Eyeball any dataset: `scripts/sample_data.py {pretrain|sft|rl}
+  [--name <canonical-name>] [-n N]` prints metadata + sampled examples;
+  with no `--name` it picks a dataset with the stage's real sampling
+  weights (mix share / conversation count / uniform families).
 - Add a new dataset: `scripts/add_dataset.py --name <n> --url <u>`
   (or `--seed-from-local` to sync everything in `data/`); it uploads,
   hashes, and registers in the manifest. Pull with
