@@ -226,6 +226,21 @@ TASKS: dict[str, Callable[[random.Random], Task]] = {
 }
 
 
-def sample_tasks(names: list[str], n: int, rng: random.Random) -> list[Task]:
-    """n tasks drawn round-robin-ish (uniformly) from the named kinds."""
+# Training-rollout weights: learning headroom per family. copy/parity/
+# words have sat at or near their ceiling since gen-1/2, so their groups
+# are mostly zero-variance — no gradient. Weighted sampling spends
+# rollouts where reward variance still exists. Eval stays uniform
+# (rollout.eval_rewards passes no weights) so per-task numbers keep
+# their meaning across runs.
+TASK_WEIGHTS = {"copy": 0.5, "parity": 0.75, "words": 0.75,
+                "count": 1.0, "recall": 1.5, "arith": 2.0}
+
+
+def sample_tasks(names: list[str], n: int, rng: random.Random,
+                 weights: dict[str, float] | None = None) -> list[Task]:
+    """n tasks from the named kinds — uniform, or weighted if given
+    (unknown names default to weight 1.0)."""
+    if weights:
+        kinds = rng.choices(names, [weights.get(k, 1.0) for k in names], k=n)
+        return [TASKS[k](rng) for k in kinds]
     return [TASKS[rng.choice(names)](rng) for _ in range(n)]

@@ -61,6 +61,27 @@ byte-first slicing keeps split boundaries identical across tokenizers.
 | alice | 0.2 MB | Gutenberg #11 | ×1 | 0.1% | |
 | discourse-method | 0.1 MB | Gutenberg #59 | ×1 | 0.1% | |
 
+### Gen-3 mix (`configs/mix-gen3-chat.json`, built 2026-08-11)
+
+The next pretrain adds the conversational register the table above
+lacks entirely, and trims math. The gen-2 config stays pinned (it now
+explicitly excludes the new files), so old runs remain reproducible.
+
+| Change | Dataset | Size | Mult | Share |
+|---|---|---|---|---|
+| added | fineweb-edu | 101.0 MB | ×0.14 | 9.2% | 
+| added | dialogue-movies (Cornell) + dialogue-daily (DailyDialog) | 24.1 MB | ×0.3 | 4.7% |
+| trimmed | math-openweb | 101.0 MB | ×0.15 → ×0.05 | 10.7% → 3.3% |
+
+Everything else keeps its weight and dilutes slightly (wikitext →
+35.4%, books → 29.8%, code → 9.8%, enwik8 → 5.9%). The dialogue files
+are dash-prefixed plain-text transcripts (NOT the chat template — the
+`dialogue_` prefix keeps them out of sft.py's `chat_*` glob and out of
+the pinned gen-2 mix). FineWeb-Edu is fetched by `prep_fineweb.py` via
+HTTP range reads (no 2 GB shard download); dialogue by
+`prep_dialogue_data.py` (DailyDialog via the roskoN HF mirror — the
+original yanran.li zip is behind a bot check).
+
 ### enwik8 is load-bearing
 
 `configs/mix-downweight-wiki.json` splits enwik8 90/5/5: the 5% val
@@ -74,8 +95,9 @@ byte-first slicing guarantees its boundaries never move.
 
 ## SFT
 
-5 files, ~302 MB, 173,680 conversations (after the 2026-08-11
-casual-chat filtering of SmolTalk — see below). All stored in the byte chat
+5 files, ~326 MB, 190,515 conversations (after the 2026-08-11
+casual-chat filtering of SmolTalk and the OASST1 all-paths expansion —
+see below). All stored in the byte chat
 template — `0x01` user / `0x02` assistant / `0x03` end-turn / `0x04`
 end-conversation, control bytes verified absent from every pretrain
 corpus, and `chat_*` files excluded from the pretrain mix so chat can
@@ -90,11 +112,11 @@ budget are split at turn boundaries.
 
 | Dataset | Size | Convs | Share | Source | Notes |
 |---|---|---|---|---|---|
-| chat-smoltalk | 281.6 MB | 121,999 | 70.2% | HF SmolTalk (train shards) | Multi-turn chat, casual-chat filtered (below) |
-| chat-dolly | 11.9 MB | 15,011 | 8.6% | HF databricks-dolly-15k | Instruction-following |
-| chat-oasst1 | 6.3 MB | 3,670 | 2.1% | HF OASST1 | English, best-ranked conversation paths |
-| chat-tasks | 1.7 MB | 30,000 | 17.3% | generated: `scripts/gen_task_sft.py` | RL cold start — see below |
-| chat-identity | 0.3 MB | 3,000 | 1.7% | generated: `scripts/gen_identity_sft.py` | Persona — see below |
+| chat-smoltalk | 281.6 MB | 121,999 | 64.0% | HF SmolTalk (train shards) | Multi-turn chat, casual-chat filtered (below) |
+| chat-oasst1 | 30.4 MB | 20,505 | 10.8% | HF OASST1 | ALL English tree paths ≤6 KB (2026-08-11; was best-path-only, 3,670) — the real-human-conversation share, up from 2.1% |
+| chat-dolly | 11.9 MB | 15,011 | 7.9% | HF databricks-dolly-15k | Instruction-following |
+| chat-tasks | 1.7 MB | 30,000 | 15.7% | generated: `scripts/gen_task_sft.py` | RL cold start — see below |
+| chat-identity | 0.3 MB | 3,000 | 1.6% | generated: `scripts/gen_identity_sft.py` | Persona — see below |
 
 ### Casual-chat filtering (2026-08-11)
 
@@ -140,6 +162,12 @@ by a deterministic function in [0, 1] (no reward model). Generators use
 seeded RNGs, so rollout prompts are reproducible across resumes and
 each run's eval set is fixed. A −0.2 penalty applies to completions
 that never emit the end-turn id.
+
+Training rollouts sample families by learning headroom
+(`TASK_WEIGHTS`: arith 2.0, recall 1.5, count 1.0, parity/words 0.75,
+copy 0.5) — solved tasks produce zero-variance groups and therefore no
+gradient, so uniform sampling wastes rollouts on them. **Eval stays
+uniform** so per-task numbers keep their meaning across runs.
 
 Scoring quirks that exist on purpose:
 

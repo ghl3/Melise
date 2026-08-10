@@ -174,6 +174,18 @@ def test_recall_scoring():
         assert t.score(" ".join([name] * 12)) == 0.0     # list-spam blocked
 
 
+def test_weighted_task_sampling():
+    from transformer.rl import TASK_WEIGHTS, sample_tasks
+    rng = random.Random(5)
+    names = sorted(TASKS)
+    kinds = [t.kind for t in sample_tasks(names, 600, rng, weights=TASK_WEIGHTS)]
+    counts = {k: kinds.count(k) for k in names}
+    assert counts["arith"] > counts["copy"] * 2   # 2.0 vs 0.5 weight
+    assert all(counts[k] > 0 for k in names)      # nothing starved
+    uniform = [t.kind for t in sample_tasks(names, 600, random.Random(5))]
+    assert abs(uniform.count("copy") - 100) < 40  # no-weights path stays uniform
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

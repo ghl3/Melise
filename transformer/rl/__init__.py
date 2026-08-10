@@ -18,7 +18,7 @@ from .rollout import (
     rollout_batch,
     rollout_group,
 )
-from .tasks import TASKS, Task, sample_tasks
+from .tasks import TASK_WEIGHTS, TASKS, Task, sample_tasks
 
 __all__ = [
     "RolloutBatch",
@@ -32,4 +32,5 @@ __all__ = [
     "rollout_batch",
     "rollout_group",
     "sample_tasks",
+    "TASK_WEIGHTS",
 ]

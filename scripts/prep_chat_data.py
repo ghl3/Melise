@@ -113,6 +113,29 @@ def best_path(node: dict) -> list[tuple[str, str]]:
     return turns
 
 
+def all_paths(root):
+    """Every root-to-leaf path through a message tree — all ranked
+    replies, not just the best one (added 2026-08-11 to grow the
+    real-human-conversation share of SFT ~4x). Shared prefixes appear in
+    multiple paths; that mild duplication is accepted."""
+    stack = [(root, [])]
+    while stack:
+        node, turns = stack.pop()
+        role = "user" if node.get("role") == "prompter" else "assistant"
+        text = (node.get("text") or "").strip()
+        replies = []
+        if text and not node.get("deleted"):
+            turns = turns + [(role, text)]
+            replies = [r for r in node.get("replies", []) if not r.get("deleted")]
+        if replies:
+            stack.extend((r, turns) for r in replies)
+        else:
+            while turns and turns[-1][0] != "assistant":
+                turns = turns[:-1]
+            if len(turns) >= 2:
+                yield turns
+
+
 def build_oasst1(out: Path, cache: Path) -> None:
     try:
         raw = fetch(f"{HF}/datasets/{OASST1_REPO}/resolve/main/{OASST1_FILE}",
@@ -132,9 +155,10 @@ def build_oasst1(out: Path, cache: Path) -> None:
             root = tree.get("prompt") or tree
             if not str(root.get("lang", "")).startswith("en"):
                 continue
-            turns = best_path(root)
-            if len(turns) >= 2:
-                convs.append(encode_conversation(turns))
+            for turns in all_paths(root):
+                conv = encode_conversation(turns)
+                if len(conv) <= 6144:  # match the casual-chat size cap
+                    convs.append(conv)
     write_corpus(out, convs)
 
 

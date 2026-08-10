@@ -57,6 +57,7 @@ from transformer.rl import (
     eval_rewards,
     gather_completion_logprobs,
     group_advantages,
+    TASK_WEIGHTS,
     grpo_loss,
     pad_rollouts,
     rollout_batch,
@@ -273,7 +274,8 @@ def main() -> None:
 
             # ----- Rollout phase (transformer.rl.rollout) -----
             task_rng = random.Random(f"{args.seed}-{step}")
-            tasks = sample_tasks(task_names, args.prompts_per_step, task_rng)
+            tasks = sample_tasks(task_names, args.prompts_per_step, task_rng,
+                                 weights=TASK_WEIGHTS)
             # Rollouts batch across prompts of EQUAL length (KDA state
             # has no clean left-padding, so rectangular prefill only) —
             # task templates collide on length constantly, so most steps

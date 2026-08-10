@@ -1,12 +1,15 @@
 {
   "include": "data/*.txt",
-  "exclude": ["data/chat_*.txt", "data/fineweb_*.txt", "data/dialogue_*.txt"],
+  "exclude": "data/chat_*.txt",
   "multipliers": {
     "data/wikitext103_train.txt": 0.1,
     "data/enwik8.txt": 0.1,
     "data/webster_dictionary.txt": 0.1,
     "data/code_python.txt": 0.15,
-    "data/math_openweb.txt": 0.15
+    "data/math_openweb.txt": 0.05,
+    "data/fineweb_edu.txt": 0.14,
+    "data/dialogue_movies.txt": 0.3,
+    "data/dialogue_daily.txt": 0.3
   },
   "splits": {
     "data/enwik8.txt": {"train": 0.9, "val": 0.05, "test": 0.05}
