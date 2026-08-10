@@ -74,7 +74,8 @@ byte-first slicing guarantees its boundaries never move.
 
 ## SFT
 
-5 files, ~897 MB, 283,659 conversations. All stored in the byte chat
+5 files, ~302 MB, 173,680 conversations (after the 2026-08-11
+casual-chat filtering of SmolTalk — see below). All stored in the byte chat
 template — `0x01` user / `0x02` assistant / `0x03` end-turn / `0x04`
 end-conversation, control bytes verified absent from every pretrain
 corpus, and `chat_*` files excluded from the pretrain mix so chat can
@@ -89,11 +90,25 @@ budget are split at turn boundaries.
 
 | Dataset | Size | Convs | Share | Source | Notes |
 |---|---|---|---|---|---|
-| chat-smoltalk | 876.9 MB | 231,978 | 81.8% | HF SmolTalk (train shards) | Multi-turn general chat |
-| chat-dolly | 11.9 MB | 15,011 | 5.3% | HF databricks-dolly-15k | Instruction-following |
-| chat-oasst1 | 6.3 MB | 3,670 | 1.3% | HF OASST1 | English, best-ranked conversation paths |
-| chat-tasks | 1.7 MB | 30,000 | 10.6% | generated: `scripts/gen_task_sft.py` | RL cold start — see below |
-| chat-identity | 0.3 MB | 3,000 | 1.1% | generated: `scripts/gen_identity_sft.py` | Persona — see below |
+| chat-smoltalk | 281.6 MB | 121,999 | 70.2% | HF SmolTalk (train shards) | Multi-turn chat, casual-chat filtered (below) |
+| chat-dolly | 11.9 MB | 15,011 | 8.6% | HF databricks-dolly-15k | Instruction-following |
+| chat-oasst1 | 6.3 MB | 3,670 | 2.1% | HF OASST1 | English, best-ranked conversation paths |
+| chat-tasks | 1.7 MB | 30,000 | 17.3% | generated: `scripts/gen_task_sft.py` | RL cold start — see below |
+| chat-identity | 0.3 MB | 3,000 | 1.7% | generated: `scripts/gen_identity_sft.py` | Persona — see below |
+
+### Casual-chat filtering (2026-08-11)
+
+A sampling audit (`scripts/sample_data.py`, 500 random SmolTalk
+conversations) found material useless for the site's casual-chat use
+case: ~8% tool-calling (apigen `<tools>`/`<tool_call>` JSON), ~16%
+text-processing pipelines with fixed preambles (summarize / rewrite /
+extract over long input payloads), and a ~24% oversized tail (>6 KB ≈
+over the 2048-token context, so fragments train on truncated context).
+`scripts/filter_chat_data.py` drops all three (231,978 → 121,999
+conversations, 877 → 282 MB); short code Q&A is kept deliberately as
+conversational variety. A side effect: the task+identity share of SFT
+rose from ~12% to ~19%. The unfiltered original is rebuildable from HF
+via `scripts/prep_chat_data.py` if ever needed.
 
 The HF corpora were fetched with `scripts/prep_chat_data.py` (plain
 HTTPS, no `datasets` dependency) and are static. The two *generated*

@@ -24,6 +24,7 @@ cached in data/.manifest-cache.json so the tool works offline.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import mmap
 import random
@@ -31,11 +32,24 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-from transformer.chat import parse_turns, split_conversations
-from transformer.rl.tasks import TASKS
+
+def _load_module(rel_path: str):
+    """Import a repo module by file path, bypassing transformer/__init__
+    (which imports the model stack and torch — this tool needs neither,
+    and should run under plain python3)."""
+    path = PROJECT_ROOT / rel_path
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod  # dataclasses look modules up by name
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_chat = _load_module("transformer/chat.py")
+parse_turns, split_conversations = _chat.parse_turns, _chat.split_conversations
+TASKS = _load_module("transformer/rl/tasks.py").TASKS
 
 MIX = PROJECT_ROOT / "configs" / "mix-downweight-wiki.json"
 CACHE = PROJECT_ROOT / "data" / ".manifest-cache.json"
