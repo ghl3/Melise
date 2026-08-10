@@ -44,12 +44,31 @@ SFT_TAIL_LR="${SFT_TAIL_LR:-3e-5}"
 SFT_TAIL_DATA="${SFT_TAIL_DATA:-data/chat_tasks.txt data/chat_identity.txt}"
 RLVR_STEPS="${RLVR_STEPS:-600}"
 RLVR_LR="${RLVR_LR:-1e-5}"
+# Pretrain eval/checkpoint cadence — the 100-step script defaults are
+# too chatty for 100k+-step runs (~890 MB per medium checkpoint).
+PT_EVAL_EVERY="${PT_EVAL_EVERY:-250}"
+PT_SAVE_EVERY="${PT_SAVE_EVERY:-500}"
+# Optional command run after the final evals — e.g. pause the Spot
+# restarter and halt the VM so a finished run cleans itself up.
+DONE_CMD="${DONE_CMD:-}"
 
 LOG=~/pipeline.log
 say() { echo "[pipeline $(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 
 if [ "${1:-}" = "--install-boot-resume" ]; then
-    LINE="@reboot sleep 60 && bash $REPO/scripts/pipeline.sh --resume >> ~/pipeline.log 2>&1"
+    # Bake the CURRENT recipe env into the crontab line — a bare
+    # `--resume` would fall back to the defaults above, and e.g. a
+    # smaller default PT_STEPS makes an interrupted long pretrain look
+    # finished (resume would skip ahead to SFT on an unfinished base).
+    # Invoke this with the SAME env as the launch command.
+    ENV_STR=""
+    for v in PRESET TOKENIZER DEVICE PT_STEPS PT_BATCH PT_SEQ DATA_MIX \
+             SFT_STEPS SFT_BATCH SFT_SEQ SFT_TAIL_STEPS SFT_TAIL_LR \
+             SFT_TAIL_DATA RLVR_STEPS RLVR_LR PT_EVAL_EVERY PT_SAVE_EVERY \
+             DONE_CMD; do
+        ENV_STR="$ENV_STR $v=$(printf %q "${!v}")"
+    done
+    LINE="@reboot sleep 60 && cd $REPO &&$ENV_STR bash scripts/pipeline.sh --resume >> ~/pipeline.log 2>&1"
     (crontab -l 2>/dev/null | grep -vF "pipeline.sh --resume"; echo "$LINE") | crontab -
     say "boot-resume crontab installed: $LINE"
     exit 0
@@ -74,6 +93,7 @@ elif [ "$RESUME_MODE" = 1 ] && stage_live "$PT_DIR"; then
     say "resuming pretrain: $PT_DIR"
     $PY scripts/pretrain.py --resume "$PT_DIR/latest.pt" --steps "$PT_STEPS" \
         --batch-size "$PT_BATCH" --data-mix "$DATA_MIX" \
+        --eval-every "$PT_EVAL_EVERY" --save-every "$PT_SAVE_EVERY" \
         --device "$DEVICE" > ~/pretrain_run.log 2>&1
 elif [ "$RESUME_MODE" = 1 ] && stage_done "$PT_DIR"; then
     say "pretrain already done: $PT_DIR"
@@ -81,7 +101,9 @@ else
     say "fresh pretrain: $PRESET/$TOKENIZER, $PT_STEPS steps @ seq $PT_SEQ"
     $PY scripts/pretrain.py --preset "$PRESET" --tokenizer "$TOKENIZER" \
         --steps "$PT_STEPS" --batch-size "$PT_BATCH" --seq-len "$PT_SEQ" \
-        --data-mix "$DATA_MIX" --device "$DEVICE" > ~/pretrain_run.log 2>&1
+        --data-mix "$DATA_MIX" \
+        --eval-every "$PT_EVAL_EVERY" --save-every "$PT_SAVE_EVERY" \
+        --device "$DEVICE" > ~/pretrain_run.log 2>&1
 fi
 PT_DIR=$(newest pretrain)
 say "pretrain exit $? ($PT_DIR)"
@@ -154,3 +176,7 @@ $PY scripts/eval_checkpoint.py "$PT_DIR/best.pt" "$SFT_DIR/best.pt" \
     "$RLVR_DIR/best.pt" --device "$DEVICE" > ~/eval_run.log 2>&1
 say "evals exit $? — see ~/eval_run.log and <run>/evals.jsonl"
 say "PIPELINE_DONE"
+if [ -n "$DONE_CMD" ]; then
+    say "running DONE_CMD: $DONE_CMD"
+    eval "$DONE_CMD"
+fi

@@ -115,7 +115,7 @@ def best_path(node: dict) -> list[tuple[str, str]]:
 
 def all_paths(root):
     """Every root-to-leaf path through a message tree — all ranked
-    replies, not just the best one (added 2026-08-11 to grow the
+    replies, not just the best one (added 2026-08-10 to grow the
     real-human-conversation share of SFT ~4x). Shared prefixes appear in
     multiple paths; that mild duplication is accepted."""
     stack = [(root, [])]

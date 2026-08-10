@@ -3,7 +3,7 @@
     .venv/bin/python scripts/filter_chat_data.py --dry-run   # stats only
     .venv/bin/python scripts/filter_chat_data.py             # rewrite in place
 
-Built for chat_smoltalk.txt after a sampling audit (2026-08-11, 500
+Built for chat_smoltalk.txt after a sampling audit (2026-08-10, 500
 random conversations): ~9% is tool-calling (apigen — '<tools>' schemas
 and '<tool_call>' JSON), ~15% is text-processing pipelines with fixed
 preambles (summarize / rewrite / extract) whose long input payloads

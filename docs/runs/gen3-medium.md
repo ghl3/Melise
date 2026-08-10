@@ -1,7 +1,7 @@
 # Gen-3 — medium on the chat mix (IN PREP — launch pending)
 
 The capacity generation: same pipeline, 3.5× the model, retargeted at
-casual chat. Recipe frozen 2026-08-11; results section to be filled
+casual chat. Recipe frozen 2026-08-10; results section to be filled
 during/after the run. Decisions and rationale: `docs/NOTEBOOK.md` and
 user calls logged there (skip gen-2.5; keep the Victorian book
 register; d=384 over 512 for the ~4.5-day budget).
@@ -23,17 +23,35 @@ register; d=384 over 512 for the ~4.5-day budget).
 
 ## Infrastructure
 
-- **Spot VM** `kimi3-train` (converted 2026-08-11, same boot disk,
-  ~1/3 cost). Boot-resume crontab installed (`--resume` on reboot).
-- At launch: create the paused Cloud Scheduler job that calls
-  `instances start` every 15 min (Spot preemptions STOP the VM;
-  something must start it), then unpause.
-- Launch command (VM, after a 10-step re-probe at vocab 8192):
+- **Spot VM** `kimi3-train` (converted 2026-08-10, same boot disk,
+  ~1/3 cost). Boot-resume crontab is installed **at launch, after the
+  pipeline starts** — never earlier: on a pre-launch boot it resumes
+  whatever half-state is on disk (learned the hard way during toy
+  validation, when a boot fired a real 1500-step tail off gen-2's
+  checkpoints while the toy run was tokenizing).
+- Auto-restarter: Cloud Scheduler job `kimi3-spot-restart`
+  (us-central1, every 15 min → `instances start`; harmless no-op when
+  already running). Created 2026-08-10, **PAUSED** — unpause at
+  launch, and the DONE_CMD below re-pauses it and halts the VM when
+  the pipeline finishes, so a completed run cleans itself up.
+- Checkpoint/eval cadence: `PT_EVAL_EVERY=250 PT_SAVE_EVERY=500`
+  (pipeline defaults; ~20 min of work at risk per preemption).
+  BucketSync mirrors deletions, so pruned checkpoints don't
+  accumulate in the bucket.
+- Launch sequence: start VM → on VM, launch the pipeline:
 
+      DONE_CMD="gcloud scheduler jobs pause kimi3-spot-restart --location=us-central1; sudo shutdown -h +2" \
       PRESET=kimi3-medium TOKENIZER=bpe8k \
       DATA_MIX=configs/mix-gen3-chat.json \
       PT_STEPS=145000 PT_BATCH=5 SFT_BATCH=5 SFT_STEPS=20000 \
       nohup bash scripts/pipeline.sh > ~/pipeline_nohup.log 2>&1 &
+
+  then, only once it's stepping: `bash scripts/pipeline.sh
+  --install-boot-resume` (the @reboot hook needs DONE_CMD too — see
+  note below) and unpause `kimi3-spot-restart`.
+- **Boot-resume + DONE_CMD**: the crontab entry must carry the same
+  DONE_CMD so a post-preemption resume that reaches the end also
+  cleans up.
 
 - Estimated wall-clock: pretrain ~4.2d + SFT ~14h + tail ~1h +
   GRPO ~6h + evals ≈ **5.3 days**; ~$40 Spot.

@@ -241,3 +241,66 @@ preferences denied again 2026-08-10 — medium-BPE stays blocked;
 options are later resubmission, sequential medium on the existing L4
 (~4 days), or another region/GPU. (c) flora now serves the gen-2
 chain locally (worker auto-discovers newest best.pt per stage).
+
+## 2026-08-10 — Gen-3 prep: chat-retargeted data, bpe8k, preamble, Spot infra
+
+Recipe and launch procedure: **docs/runs/gen3-medium.md** (new
+convention — run docs carry the config; this entry carries the story).
+
+**Goal.** Skip gen-2.5 (its fixes ride along) and prepare generation-3
+— kimi3-medium on a casual-chat-retargeted stack — to launch-ready,
+without launching.
+
+**Setup / work done.**
+- **Chat product** (context for the data pivot): flora→lily site,
+  saved chats, worker+UI shipped; a live chat battery against gen-2
+  exposed the failure modes that set this session's agenda (no
+  identity, no perspective flip, template-locked skills, register).
+- **Data overhaul** (docs/DATASETS.md): SmolTalk casual-chat filter
+  (−47%: 8% tool-calling, 16% summarize/rewrite pipelines, 24%
+  oversized); OASST1 all-English-paths 3,670→20,505 convs; identity
+  corpus (persona/no-clock honesty, varied names); recall task family
+  (person-deixis flip); arith 0.25 format credit; 3–4 prompt
+  paraphrases per family; RL headroom weights (arith 2.0…copy 0.5,
+  eval uniform); +fineweb-edu 400 MB (HTTP range reads — 242 MB
+  transferred of a 2.15 GB shard) and Cornell+DailyDialog dialogue
+  corpora; math ×0.05. New tools: sample_data.py, filter_chat_data.py.
+- **bpe8k** (8192, digit-isolated, specials pinned): 8–12% fewer
+  tokens/byte than bpe4k (enwik8 2.95, fineweb 3.68 B/tok). User
+  call: take the compression, attribution be damned.
+- **Metrics**: every logged bpb is now bits-per-RAW-BYTE via exact
+  per-id byte tables (init sanity: 4.45 bpb = uniform over 8192);
+  train entropy_bits; per-domain pretrain val (enwik8/fineweb/
+  dialogue/books); per-source SFT val (val_source/*).
+- **Preamble**: plain text before the first marker (no new control
+  byte — reuses pretrained language circuitry, no tokenizer re-pin);
+  varied names in identity/task data so identity is read, not
+  memorized; GRPO rollouts + serve --preamble carry the deployed
+  string.
+- **Infra**: VM recreated as Spot on its boot disk; b5 probe
+  20.1/22.5 GiB @ 4,098 tok/s (b6 OOMs); boot-resume crontab;
+  kimi3-spot-restart scheduler (paused); DONE_CMD self-cleanup;
+  PT cadence 250/500; git bundle refreshed (was 16 commits stale).
+
+**Results.** Recipe frozen: 74.2M @ bpe8k, 145k steps × b5 ≈ 1.48B
+tokens (Chinchilla), mix-gen3-chat, SFT 20k + tail 1.5k, GRPO 600
+weighted — est. ~5.3 days, ~$40 Spot. Toy full-pipeline validation on
+the VM: see run doc (validates GRPO preamble/weights and the tail
+stage end-to-end; warms the bpe8k token cache).
+
+**Learnings.**
+- A 500-conversation sampling audit beats any amount of dataset-card
+  reading — one random draw found the tool-calling subset.
+- Compute-optimal sizing said d=384/74M for a ~4.5-day L4 budget;
+  d=512 (~125M) needs ~7+ days to be worth it (declined for now).
+- Fetch gotchas for the record: yanran.li is bot-walled (use the
+  roskoN HF mirror); pyarrow probes .closed as an attribute; raw
+  urllib needs certifi's SSL context on macOS; importlib-loaded
+  modules must be registered in sys.modules before dataclasses work.
+
+**Next steps.** Launch per the run doc (unpause restarter → DONE_CMD
+pipeline command). During: watch val_domain/dialogue+fineweb,
+val_source/identity, dead_frac; daily laptop eval_checkpoint on
+best.pt. After: results into the run doc, chat battery vs gen-2,
+model naming (Wren/Fern/Willa/Flora reserved), Cloud Run + Vercel
+deploys.

@@ -61,7 +61,7 @@ byte-first slicing keeps split boundaries identical across tokenizers.
 | alice | 0.2 MB | Gutenberg #11 | ×1 | 0.1% | |
 | discourse-method | 0.1 MB | Gutenberg #59 | ×1 | 0.1% | |
 
-### Gen-3 mix (`configs/mix-gen3-chat.json`, built 2026-08-11)
+### Gen-3 mix (`configs/mix-gen3-chat.json`, built 2026-08-10)
 
 The next pretrain adds the conversational register the table above
 lacks entirely, and trims math. The gen-2 config stays pinned (it now
@@ -95,7 +95,7 @@ byte-first slicing guarantees its boundaries never move.
 
 ## SFT
 
-5 files, ~326 MB, 190,515 conversations (after the 2026-08-11
+5 files, ~326 MB, 190,515 conversations (after the 2026-08-10
 casual-chat filtering of SmolTalk and the OASST1 all-paths expansion —
 see below). All stored in the byte chat
 template — `0x01` user / `0x02` assistant / `0x03` end-turn / `0x04`
@@ -113,12 +113,12 @@ budget are split at turn boundaries.
 | Dataset | Size | Convs | Share | Source | Notes |
 |---|---|---|---|---|---|
 | chat-smoltalk | 281.6 MB | 121,999 | 64.0% | HF SmolTalk (train shards) | Multi-turn chat, casual-chat filtered (below) |
-| chat-oasst1 | 30.4 MB | 20,505 | 10.8% | HF OASST1 | ALL English tree paths ≤6 KB (2026-08-11; was best-path-only, 3,670) — the real-human-conversation share, up from 2.1% |
+| chat-oasst1 | 30.4 MB | 20,505 | 10.8% | HF OASST1 | ALL English tree paths ≤6 KB (2026-08-10; was best-path-only, 3,670) — the real-human-conversation share, up from 2.1% |
 | chat-dolly | 11.9 MB | 15,011 | 7.9% | HF databricks-dolly-15k | Instruction-following |
 | chat-tasks | 1.7 MB | 30,000 | 15.7% | generated: `scripts/gen_task_sft.py` | RL cold start — see below |
 | chat-identity | 0.3 MB | 3,000 | 1.6% | generated: `scripts/gen_identity_sft.py` | Persona — see below |
 
-### Casual-chat filtering (2026-08-11)
+### Casual-chat filtering (2026-08-10)
 
 A sampling audit (`scripts/sample_data.py`, 500 random SmolTalk
 conversations) found material useless for the site's casual-chat use
