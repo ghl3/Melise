@@ -173,3 +173,71 @@ untrained policy). VM updated and passing the same tests.
 (kimi3/bpe4k, seq 2048, 25k/9k/600 steps, GRPO lr 1e-5) — on Spot with
 the boot-resume hook. GPU quota window (1→3) opens 2026-08-09 ~19:20 UTC;
 add medium-BPE at Chinchilla in parallel if granted.
+
+## 2026-08-10 — Generation-2 run: pretrain −20% bpb; arith cold start failed generatively
+
+**Goal.** First full generation on the new stack (bpe4k, seq 2048,
+enriched mix, worked-steps arith, batched GRPO @ lr 1e-5) via
+`scripts/pipeline.sh`; beat gen-1 (scarlet-harbor) on byte-normalized
+test bpb and task rewards.
+
+**Setup.** One command on the L4 (on-demand). Launch found a recipe
+bug: batch 16 @ seq 2048 fp32 OOMs the 22 GiB L4 on step 1. Recipe
+fixed to batch 12 with the token budget held (~819M: 33,333 steps;
+SFT 12,000 × b12 = same examples as 9,000 × b16), batch now forwarded
+on resume paths, `expandable_segments` on (commit b5c0494). A 30-step
+probe measured peak 21.2/22.5 GiB, 11.3k tok/s before relaunch.
+Runs: `kimi3-19M-golden-dell-20260808-204157` → sft → rlvr.
+Wall-clock: pretrain 20.4h, SFT 7.6h, GRPO 2.7h (600 steps — 2.2×
+faster per step than gen-1 thanks to rollout batching + shorter BPE
+sequences), evals 3m. GPU held 86–100% at 20.5–21.7 GiB throughout.
+
+**Results.** (enwik8 test slice, bpb normalized by bytes — the
+cross-tokenizer axis)
+
+| checkpoint | test bpb | gen-1 |
+|---|---|---|
+| pretrain best (step 31,400) | **1.247** | 1.560 |
+| sft best | 1.694 | — |
+| rlvr best | 1.702 | — |
+
+- **Pretrain −0.31 bpb (−20%)** — tokenizer + code/math mix + long
+  context + 2× Chinchilla, compounded. (Gen-1 medium/large sat at
+  1.93/2.00; a 19M model now beats them by half a bit.)
+- SFT val (bits/assistant-token) 2.762, still every-eval-best at
+  12k steps; `tasks_bpb` 1.040 — the worked-steps corpus was learned
+  *as data*.
+- GRPO eval reward **0.700 from step 40 and frozen thereafter**
+  (gen-1: 0.683): copy 1.00, parity **1.00** (gen-1 oscillated
+  0.83↔0.17 — the lr halving cured it), words **1.00** (was 0.67),
+  count 0.75 (unchanged), **arith 0.00** (was 0.20).
+- Forgetting check: SFT costs +0.45 bpb on raw text; GRPO costs
+  +0.008 — the k3-KL leash preserves the LM almost exactly.
+
+**Learnings.**
+- **Teacher-forced mastery ≠ generative behavior.** tasks_bpb 1.04
+  says the model models worked-steps text; greedy probes say it never
+  *produces* it: "What is 47 + 12?" → "12" (sft and rlvr both emit a
+  short wrong integer; rollout len 5–7 tokens). The ~12% task share
+  lost the first-token branch to the short-answer chat prior.
+- With all-wrong arith groups, z-scored group advantage is
+  identically zero — RL cannot bootstrap a behavior that never
+  appears in rollouts (dead_frac ~50% all run ≈ all-zero arith
+  groups + saturated-perfect groups). Gen-1's 0.20 came from *short*
+  canonical answers matching the generative prior, not from better
+  math.
+- Eval saturation: 3 of 5 tasks at 1.00 by step 40 → 560 further
+  steps only drifted KL (0.40 at end, grad 4–5). Next run needs
+  either a harder eval set or early stop on frozen eval.
+- Batch 16 @ 2048 fp32 never fit the L4; the toy chain validated
+  correctness, not memory. Probe memory at full shape before any
+  recipe change.
+
+**Next steps.** (a) Fix arith cold start *generatively*: raise task
+share late in SFT (anneal) or add a short task-only SFT tail; and/or
+give GRPO partial format credit (e.g. reward containing "=") so rare
+worked-steps rollouts get nonzero advantage. (b) Quota: both GPU
+preferences denied again 2026-08-10 — medium-BPE stays blocked;
+options are later resubmission, sequential medium on the existing L4
+(~4 days), or another region/GPU. (c) flora now serves the gen-2
+chain locally (worker auto-discovers newest best.pt per stage).
