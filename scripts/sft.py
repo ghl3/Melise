@@ -239,6 +239,15 @@ def main() -> None:
     val_tasks_convs = (split_conversations(tasks_path.read_bytes())[:128]
                        if tasks_path.exists() else [])
 
+    # Per-source diagnostics (same caveat as tasks_bpb: fixed slices
+    # overlapping the train pool). One bpb curve per corpus answers
+    # "which register is being learned" — the SFT analogue of
+    # pretrain's val_domain metrics. Evaluated every 4th eval.
+    source_val = {
+        p.stem.removeprefix("chat_"): split_conversations(p.read_bytes())[:32]
+        for p in data_paths
+    }
+
     manifest_path = out_dir / "run.json"
     if not manifest_path.exists():
         manifest_path.write_text(json.dumps({
@@ -347,18 +356,34 @@ def main() -> None:
                 if is_best:
                     best_val, best_step = val, step
                     full_save(out_dir / "best.pt", step)
+                source_bpb = {}
+                if step % (args.eval_every * 4) == 0:
+                    for name, cs in source_val.items():
+                        if not cs:
+                            continue
+                        n_b = -(-len(cs) // args.batch_size)  # ceil
+                        _, s_bpb = masked_conversation_loss(
+                            model, cs, args.batch_size, args.seq_len, n_b,
+                            device, tok=tok, byte_lens=byte_lens)
+                        source_bpb[name] = round(s_bpb, 4)
                 tasks_str = (f"  tasks_bpb={tasks_bpb:.3f}"
                              if tasks_bpb is not None else "")
                 print(f"        val_loss={val:.4f}  val_bpb={val_bpb:.3f}"
                       f"{tasks_str}" + ("  ← best" if is_best else ""))
+                if source_bpb:
+                    print("        src: " + "  ".join(
+                        f"{k}={v:.3f}" for k, v in sorted(source_bpb.items())))
                 emit(metrics_f, event="eval", step=step, val_loss=val,
                      val_bpb=val_bpb, val_tasks_bpb=tasks_bpb,
+                     source_bpb=source_bpb or None,
                      tokens_seen=tokens_seen, is_best=is_best)
                 if writer is not None:
                     writer.add_scalar("val/loss", val, step)
                     writer.add_scalar("val/bpb", val_bpb, step)
                     if tasks_bpb is not None:
                         writer.add_scalar("val/tasks_bpb", tasks_bpb, step)
+                    for name, v in source_bpb.items():
+                        writer.add_scalar(f"val_source/{name}", v, step)
                     writer.flush()
                 sync.kick()
 

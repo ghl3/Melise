@@ -18,7 +18,7 @@ register; d=384 over 512 for the ~4.5-day budget).
 | SFT | 20,000 steps × batch 5, cleaned corpora (190,515 convs) | filtered SmolTalk + all-paths OASST + identity/tasks with **preambles** |
 | SFT tail | 1,500 steps @ lr 3e-5, tasks+identity only | make formats generative (gen-2 lesson) |
 | GRPO | 600 steps, lr 1e-5, headroom-weighted rollouts, preamble on every prompt | arith 2.0 … copy 0.5; eval uniform |
-| metrics | byte-true bpb everywhere, train entropy_bits, per-domain val | long-run visibility; curves comparable to gen-1/2 and the literature |
+| metrics | byte-true bpb everywhere, train entropy_bits, pretrain per-domain val, SFT per-source val (`val_source/*`, every 4th eval) | long-run visibility; curves comparable to gen-1/2 and the literature |
 | preamble | `You are Lily, a tiny language model.` (varied names in training) | identity read from context, not memorized; serve gen-3 with `--preamble` |
 
 ## Infrastructure
