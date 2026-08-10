@@ -7,7 +7,7 @@ import Composer from "./Composer";
 import ControlsBar from "./ControlsBar";
 import MessageList from "./MessageList";
 
-const STORAGE_KEY = "flora-v1";
+const STORAGE_KEY = "elsa-v1";
 
 // Prompt formats the RL stage actually trained on — honest demo chips.
 const SAMPLES = [
@@ -100,7 +100,7 @@ export default function Chat() {
         <div className="flex items-baseline gap-3">
           <span aria-hidden className="text-xl text-moss">❦</span>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">flora</h1>
+            <h1 className="text-lg font-semibold tracking-tight">elsa</h1>
             <p className="text-xs text-dim">
               tiny transformers, trained from scratch
             </p>

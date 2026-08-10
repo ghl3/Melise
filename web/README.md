@@ -1,4 +1,4 @@
-# flora
+# elsa
 
 Next.js + TypeScript + Tailwind chat UI for the repo's trained
 checkpoints. Forest-on-cream theme. The browser talks only to the two API
