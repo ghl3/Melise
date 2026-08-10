@@ -49,7 +49,7 @@ from transformer.tokenizer import load_tokenizer
 
 STAGES = ("rlvr", "sft", "pretrain")  # discovery order: most chat-tuned first
 
-app = FastAPI(title="elsa inference worker")
+app = FastAPI(title="lily inference worker")
 MODELS: dict[str, dict] = {}  # name -> {model, tok, cfg, stage, params}
 DEVICE = "cpu"
 MAX_NEW_CAP = 512

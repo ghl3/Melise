@@ -41,6 +41,9 @@ body {
   animation: pulse-caret 1s ease-in-out infinite;
 }
 
+/* Selection must contrast with BOTH bubble fills (fern and panel) —
+   matching the fern bubble color made user-side selections invisible. */
 ::selection {
-  background: var(--color-fern);
+  background: var(--color-moss);
+  color: var(--color-bg);
 }
