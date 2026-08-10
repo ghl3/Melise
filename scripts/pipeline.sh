@@ -3,6 +3,8 @@
 #
 #     bash scripts/pipeline.sh                # fresh generation, defaults below
 #     bash scripts/pipeline.sh --resume       # continue after crash/preemption
+#     bash scripts/pipeline.sh --post-only    # fresh SFT->GRPO from the newest
+#                                             # FINISHED pretrain (skip stage 1)
 #     PRESET=kimi3 TOKENIZER=bpe4k PT_STEPS=25000 bash scripts/pipeline.sh
 #
 # Every knob is an environment variable (defaults = the next-gen recipe).
@@ -34,6 +36,12 @@ DATA_MIX="${DATA_MIX:-configs/mix-downweight-wiki.json}"
 SFT_STEPS="${SFT_STEPS:-12000}"     # 12000 x batch 12 = same examples as 9000 x 16
 SFT_BATCH="${SFT_BATCH:-12}"        # sft.py's own default (16) doesn't fit either
 SFT_SEQ="${SFT_SEQ:-2048}"
+# Task-focus tail: a short low-LR pass over task-format data only, so the
+# formats SFT merely *models* become what it *generates* (gen-2 lesson:
+# tasks_bpb 1.04 yet zero worked-steps rollouts). 0 disables.
+SFT_TAIL_STEPS="${SFT_TAIL_STEPS:-1500}"
+SFT_TAIL_LR="${SFT_TAIL_LR:-3e-5}"
+SFT_TAIL_DATA="${SFT_TAIL_DATA:-data/chat_tasks.txt data/chat_identity.txt}"
 RLVR_STEPS="${RLVR_STEPS:-600}"
 RLVR_LR="${RLVR_LR:-1e-5}"
 
@@ -47,6 +55,7 @@ if [ "${1:-}" = "--install-boot-resume" ]; then
     exit 0
 fi
 RESUME_MODE=$([ "${1:-}" = "--resume" ] && echo 1 || echo 0)
+POST_ONLY=$([ "${1:-}" = "--post-only" ] && echo 1 || echo "${POST_ONLY:-0}")
 
 newest() { ls -td "$REPO/checkpoints/$1"/*/ 2>/dev/null | head -1; }
 stage_done() {  # run dir finished cleanly?
@@ -58,7 +67,10 @@ stage_live() {  # resumable run dir?
 
 # ---- Stage 1: pretrain ----
 PT_DIR=$(newest pretrain)
-if [ "$RESUME_MODE" = 1 ] && stage_live "$PT_DIR"; then
+if [ "$POST_ONLY" = 1 ]; then
+    stage_done "$PT_DIR" || { say "post-only: no finished pretrain"; exit 1; }
+    say "post-only: reusing pretrain $PT_DIR"
+elif [ "$RESUME_MODE" = 1 ] && stage_live "$PT_DIR"; then
     say "resuming pretrain: $PT_DIR"
     $PY scripts/pretrain.py --resume "$PT_DIR/latest.pt" --steps "$PT_STEPS" \
         --batch-size "$PT_BATCH" --data-mix "$DATA_MIX" \
@@ -92,6 +104,32 @@ fi
 SFT_DIR=$(newest sft)
 say "sft exit $? ($SFT_DIR)"
 [ -e "$SFT_DIR/best.pt" ] || { say "no sft best.pt — aborting"; exit 1; }
+
+# ---- Stage 2b: task-focus SFT tail (short, low LR, task data only) ----
+# Tail run dirs are named <main-run>-tail, so resume logic can tell the
+# two apart: a live tail resumes via stage 2's own resume branch; a done
+# tail is skipped here; a done main run with no tail yet starts one.
+if [ "$SFT_TAIL_STEPS" -gt 0 ]; then case "$(basename "$SFT_DIR")" in
+    *-tail) say "sft tail already done: $SFT_DIR" ;;
+    *)
+        TAIL_NAME="$(basename "$SFT_DIR")-tail"
+        TAIL_DIR="$REPO/checkpoints/sft/$TAIL_NAME"
+        if stage_done "$TAIL_DIR/"; then
+            say "sft tail already done: $TAIL_DIR"
+        else
+            TAIL_DATA_ARGS=""
+            for f in $SFT_TAIL_DATA; do TAIL_DATA_ARGS="$TAIL_DATA_ARGS --data $f"; done
+            say "sft task tail from $SFT_DIR/best.pt ($SFT_TAIL_STEPS steps @ lr $SFT_TAIL_LR)"
+            $PY scripts/sft.py --init "$SFT_DIR/best.pt" --steps "$SFT_TAIL_STEPS" \
+                --batch-size "$SFT_BATCH" --seq-len "$SFT_SEQ" --lr "$SFT_TAIL_LR" \
+                $TAIL_DATA_ARGS --run-name "$TAIL_NAME" \
+                --device "$DEVICE" >> ~/sft_run.log 2>&1
+            say "sft tail exit $?"
+        fi
+        [ -e "$TAIL_DIR/best.pt" ] || { say "no tail best.pt — aborting"; exit 1; }
+        SFT_DIR="$TAIL_DIR"
+        ;;
+esac; fi
 
 # ---- Stage 3: GRPO ----
 RLVR_DIR=$(newest rlvr)

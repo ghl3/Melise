@@ -2,9 +2,14 @@
 
 Each task is a prompt plus a deterministic scoring function — no reward
 model, no human labels. This is the RLVR (RL with verifiable rewards)
-recipe GRPO is normally paired with, shrunk to problems a 17M byte model
+recipe GRPO is normally paired with, shrunk to problems a tiny model
 can actually learn: copying, tiny arithmetic, parity, letter counting,
-length control. Scores are in [0, 1].
+length control, and in-context recall. Scores are in [0, 1].
+
+Every family draws its prompt from several paraphrase templates (added
+after gen-2: skills were template-locked — parity scored 1.00 on the
+seeded eval yet failed on rewordings). Note this means seeded eval sets
+are NOT comparable across this change.
 
 Every generator draws from its own `random.Random`, so a seeded RNG
 reproduces the same task sequence — rollouts stay comparable across
@@ -44,6 +49,11 @@ _FILLER = (
 ).split()
 
 _FIRST_INT = re.compile(r"-?\d+")
+
+_NAMES = (
+    "Frank George Alice Maria Tom Sara Omar Nina Leo Ruth Ivan Ana "
+    "Peter Lucy Sam Rosa Karl Vera Hugo Elena Jack Iris Noah Cora"
+).split()
 
 
 @dataclass
@@ -89,27 +99,45 @@ def make_copy(rng: random.Random) -> Task:
     """Repeat a short phrase exactly. Partial credit by similarity ratio,
     so early training gets a gradient before exact copying clicks."""
     phrase = " ".join(rng.sample(_WORDS, rng.randint(2, 5)))
+    prompt = rng.choice((
+        f"Repeat exactly: {phrase}",
+        f"Say exactly: {phrase}",
+        f"Echo this exactly: {phrase}",
+        f"Repeat after me: {phrase}",
+    ))
     def score(text: str) -> float:
         if text.strip() == phrase:
             return 1.0
         return 0.5 * difflib.SequenceMatcher(None, text.strip(), phrase).ratio()
-    return Task("copy", f'Repeat exactly: {phrase}', phrase, score)
+    return Task("copy", prompt, phrase, score)
 
 
 def make_arith(rng: random.Random) -> Task:
-    """Two-operand addition/subtraction. All-or-nothing on the LAST
-    integer in the reply, so the model may (and the canonical answer
-    does) show carry/borrow steps before answering — cold-start SFT
-    teaches the decomposition pattern, not just the result."""
+    """Two-operand addition/subtraction, scored on the LAST integer in
+    the reply, so the model may (and the canonical answer does) show
+    carry/borrow steps before answering. A wrong answer that still shows
+    worked-steps evidence ('=') gets 0.25: gen-2 proved that when every
+    rollout in a group scores 0, the z-scored advantage is identically
+    zero and RL can never bootstrap the format — partial format credit
+    gives the first worked-steps rollout a nonzero gradient."""
     a, b = rng.randint(2, 99), rng.randint(2, 99)
     sub = rng.random() < 0.5
     if sub:
         a, b = max(a, b), min(a, b)
-        prompt, answer = f"What is {a} - {b}?", a - b
+        op, answer = "-", a - b
     else:
-        prompt, answer = f"What is {a} + {b}?", a + b
-    return Task("arith", prompt, _worked(a, b, sub),
-                lambda t: float(_last_int(t) == answer))
+        op, answer = "+", a + b
+    prompt = rng.choice((
+        f"What is {a} {op} {b}?",
+        f"What's {a} {op} {b}?",
+        f"Compute {a} {op} {b}.",
+        f"{a} {op} {b} = ?",
+    ))
+    def score(text: str) -> float:
+        if _last_int(text) == answer:
+            return 1.0
+        return 0.25 if "=" in text else 0.0
+    return Task("arith", prompt, _worked(a, b, sub), score)
 
 
 def make_parity(rng: random.Random) -> Task:
@@ -117,12 +145,17 @@ def make_parity(rng: random.Random) -> Task:
     n = rng.randint(1, 999)
     answer = "even" if n % 2 == 0 else "odd"
     wrong = "odd" if n % 2 == 0 else "even"
+    prompt = rng.choice((
+        f"Is {n} even or odd? Answer with one word.",
+        f"Is the number {n} even or odd?",
+        f"Even or odd: {n}?",
+        f"Tell me whether {n} is even or odd.",
+    ))
     def score(text: str) -> float:
         t = text.strip().lower()
         # Saying both words (or the wrong one) scores nothing.
         return float(answer in t and wrong not in t.replace(answer, "", 1))
-    return Task("parity", f"Is {n} even or odd? Answer with one word.",
-                answer.capitalize(), score)
+    return Task("parity", prompt, answer.capitalize(), score)
 
 
 def make_count_letter(rng: random.Random) -> Task:
@@ -131,12 +164,13 @@ def make_count_letter(rng: random.Random) -> Task:
     word = rng.choice(_WORDS)
     letter = rng.choice(sorted(set(word)))
     answer = word.count(letter)
-    return Task(
-        "count",
+    prompt = rng.choice((
         f"How many times does the letter '{letter}' appear in '{word}'?",
-        str(answer),
-        lambda t: float(_last_int(t) == answer),
-    )
+        f"Count the letter '{letter}' in '{word}'.",
+        f"How many '{letter}'s are in '{word}'?",
+    ))
+    return Task("count", prompt, str(answer),
+                lambda t: float(_last_int(t) == answer))
 
 
 def make_word_count(rng: random.Random) -> Task:
@@ -149,10 +183,37 @@ def make_word_count(rng: random.Random) -> Task:
     pool = [w for w in _FILLER if w not in base]
     words = (base + rng.sample(pool, max(n - len(base), 0)))[:n]
     canonical = " ".join(words).capitalize().rstrip(",") + "."
+    prompt = rng.choice((
+        f"Describe {topic} in exactly {n} words.",
+        f"In exactly {n} words, describe {topic}.",
+        f"Write exactly {n} words about {topic}.",
+    ))
     def score(text: str) -> float:
         k = len(text.split())
         return max(0.0, 1.0 - abs(k - n) / n) if k else 0.0
-    return Task("words", f"Describe {topic} in exactly {n} words.", canonical, score)
+    return Task("words", prompt, canonical, score)
+
+
+def make_recall(rng: random.Random) -> Task:
+    """State a name, then ask for it back — in-context retrieval plus the
+    person-deixis flip gen-2 lacked (it answered 'What is my name?' with
+    'My name is Frank.', claiming the name as its own). Full credit
+    requires the right name WITHOUT the first-person echo; the echo gets
+    half credit (right fact, wrong voice). A length cap blocks the
+    list-every-name hack."""
+    name = rng.choice(_NAMES)
+    prompt = rng.choice((
+        f"My name is {name}. What is my name?",
+        f"I'm {name}. What is my name?",
+        f"Hello, my name is {name}. What's my name?",
+        f"My name is {name}. Do you remember my name?",
+    ))
+    def score(text: str) -> float:
+        t = text.strip()
+        if len(t.split()) > 10 or name.lower() not in t.lower():
+            return 0.0
+        return 0.5 if "my name" in t.lower() else 1.0
+    return Task("recall", prompt, f"Your name is {name}.", score)
 
 
 TASKS: dict[str, Callable[[random.Random], Task]] = {
@@ -161,6 +222,7 @@ TASKS: dict[str, Callable[[random.Random], Task]] = {
     "parity": make_parity,
     "count": make_count_letter,
     "words": make_word_count,
+    "recall": make_recall,
 }
 
 

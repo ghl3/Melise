@@ -151,6 +151,29 @@ def test_task_canonical_answers():
             assert score >= 0.99, f"{name}: {task.prompt!r} -> {task.answer!r} = {score}"
 
 
+def test_arith_format_credit():
+    # Wrong-but-worked rollouts must get partial credit (nonzero group
+    # variance is what lets GRPO bootstrap the format — gen-2 lesson).
+    rng = random.Random(3)
+    for _ in range(50):
+        t = TASKS["arith"](rng)
+        assert t.score(t.answer) == 1.0
+        assert t.score("well it = hmm") == 0.25   # format shown, no answer
+        assert t.score("no idea") == 0.0
+
+
+def test_recall_scoring():
+    rng = random.Random(4)
+    for _ in range(50):
+        t = TASKS["recall"](rng)
+        name = t.answer.split()[-1].rstrip(".")
+        assert t.score(f"Your name is {name}.") == 1.0
+        assert t.score(name) == 1.0                      # bare name is fine
+        assert t.score(f"My name is {name}.") == 0.5     # right fact, wrong voice
+        assert t.score("Beatrice") == 0.0                # wrong name
+        assert t.score(" ".join([name] * 12)) == 0.0     # list-spam blocked
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
