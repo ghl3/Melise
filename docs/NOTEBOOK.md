@@ -282,11 +282,21 @@ without launching.
   kimi3-spot-restart scheduler (paused); DONE_CMD self-cleanup;
   PT cadence 250/500; git bundle refreshed (was 16 commits stale).
 
-**Results.** Recipe frozen: 74.2M @ bpe8k, 145k steps × b5 ≈ 1.48B
-tokens (Chinchilla), mix-gen3-chat, SFT 20k + tail 1.5k, GRPO 600
-weighted — est. ~5.3 days, ~$40 Spot. Toy full-pipeline validation on
-the VM: see run doc (validates GRPO preamble/weights and the tail
-stage end-to-end; warms the bpe8k token cache).
+**Results.** Recipe frozen: **72.0M measured** @ bpe8k, 145k steps ×
+b5 ≈ 1.48B tokens (20.6 tok/param), mix-gen3-chat, SFT 20k + tail
+1.5k, GRPO 600 weighted — est. ~5.3 days, ~$40 Spot. Pre-launch
+validation: three toy full-pipeline iterations on the VM, each caught
+a real bug — (1) the boot-resume crontab fires on EVERY boot and
+resumed stale gen-2 state alongside the toy (install it only after
+launch is stepping); (2) bare `--resume` fell back to small-recipe
+defaults, which would have made an interrupted 145k-step pretrain
+look finished and started SFT on an unfinished base (env now baked
+into the crontab via printf %q); (3) SFT eval cadence wasn't
+tunable and best.pt only lands at evals (SFT_EVAL_EVERY). Third
+iteration fully green: every stage incl. tail and GRPO
+(recall/weighted sampling/preamble live in logs), evals, DONE_CMD.
+Peak 21.3/22.5 GiB (GRPO is the memory high-water mark, not
+pretrain). bpe8k token cache pre-warmed.
 
 **Learnings.**
 - A 500-conversation sampling audit beats any amount of dataset-card
