@@ -36,6 +36,7 @@ DATA_MIX="${DATA_MIX:-configs/mix-downweight-wiki.json}"
 SFT_STEPS="${SFT_STEPS:-12000}"     # 12000 x batch 12 = same examples as 9000 x 16
 SFT_BATCH="${SFT_BATCH:-12}"        # sft.py's own default (16) doesn't fit either
 SFT_SEQ="${SFT_SEQ:-2048}"
+SFT_EVAL_EVERY="${SFT_EVAL_EVERY:-200}"  # best.pt only lands at evals — keep < SFT_STEPS
 # Task-focus tail: a short low-LR pass over task-format data only, so the
 # formats SFT merely *models* become what it *generates* (gen-2 lesson:
 # tasks_bpb 1.04 yet zero worked-steps rollouts). 0 disables.
@@ -63,7 +64,7 @@ if [ "${1:-}" = "--install-boot-resume" ]; then
     # Invoke this with the SAME env as the launch command.
     ENV_STR=""
     for v in PRESET TOKENIZER DEVICE PT_STEPS PT_BATCH PT_SEQ DATA_MIX \
-             SFT_STEPS SFT_BATCH SFT_SEQ SFT_TAIL_STEPS SFT_TAIL_LR \
+             SFT_STEPS SFT_BATCH SFT_SEQ SFT_EVAL_EVERY SFT_TAIL_STEPS SFT_TAIL_LR \
              SFT_TAIL_DATA RLVR_STEPS RLVR_LR PT_EVAL_EVERY PT_SAVE_EVERY \
              DONE_CMD; do
         ENV_STR="$ENV_STR $v=$(printf %q "${!v}")"
@@ -114,13 +115,13 @@ SFT_DIR=$(newest sft)
 if [ "$RESUME_MODE" = 1 ] && stage_live "$SFT_DIR"; then
     say "resuming sft: $SFT_DIR"
     $PY scripts/sft.py --resume "$SFT_DIR/latest.pt" --steps "$SFT_STEPS" \
-        --batch-size "$SFT_BATCH" --device "$DEVICE" > ~/sft_run.log 2>&1
+        --eval-every "$SFT_EVAL_EVERY" --batch-size "$SFT_BATCH" --device "$DEVICE" > ~/sft_run.log 2>&1
 elif [ "$RESUME_MODE" = 1 ] && stage_done "$SFT_DIR"; then
     say "sft already done: $SFT_DIR"
 else
     say "fresh sft from $PT_DIR/best.pt"
     $PY scripts/sft.py --init "$PT_DIR/best.pt" --steps "$SFT_STEPS" \
-        --batch-size "$SFT_BATCH" --seq-len "$SFT_SEQ" \
+        --eval-every "$SFT_EVAL_EVERY" --batch-size "$SFT_BATCH" --seq-len "$SFT_SEQ" \
         --device "$DEVICE" > ~/sft_run.log 2>&1
 fi
 SFT_DIR=$(newest sft)
@@ -143,7 +144,7 @@ if [ "$SFT_TAIL_STEPS" -gt 0 ]; then case "$(basename "$SFT_DIR")" in
             for f in $SFT_TAIL_DATA; do TAIL_DATA_ARGS="$TAIL_DATA_ARGS --data $f"; done
             say "sft task tail from $SFT_DIR/best.pt ($SFT_TAIL_STEPS steps @ lr $SFT_TAIL_LR)"
             $PY scripts/sft.py --init "$SFT_DIR/best.pt" --steps "$SFT_TAIL_STEPS" \
-                --batch-size "$SFT_BATCH" --seq-len "$SFT_SEQ" --lr "$SFT_TAIL_LR" \
+                --eval-every "$SFT_EVAL_EVERY" --batch-size "$SFT_BATCH" --seq-len "$SFT_SEQ" --lr "$SFT_TAIL_LR" \
                 $TAIL_DATA_ARGS --run-name "$TAIL_NAME" \
                 --device "$DEVICE" >> ~/sft_run.log 2>&1
             say "sft tail exit $?"
