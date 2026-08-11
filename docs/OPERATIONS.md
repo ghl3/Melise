@@ -111,7 +111,7 @@ halts itself when the run finishes. Use the bucket view.
 |---|---|
 | `~/pipeline.log` | one `say` line per stage transition; `PIPELINE_DONE` at the end. Boot-resume appends here too — it's the preemption audit trail. |
 | `~/pipeline_nohup.log` | stdout of the launch invocation (stage lines again) |
-| `~/pretrain_run.log`, `~/sft_run.log`, `~/grpo_run.log`, `~/eval_run.log` | full stdout per stage: step lines, val lines, sampled generations, **and crash tracebacks** — stage scripts restore stderr before exceptions propagate, so tracebacks are here, NOT in the run dir's `train.log` |
+| `~/pretrain_run.log`, `~/sft_run.log`, `~/grpo_run.log`, `~/eval_run.log` | stdout per stage: step lines, val lines, sampled generations, **and crash tracebacks** — stage scripts restore stderr before exceptions propagate, so tracebacks are here, NOT in the run dir's `train.log`. **Truncated on every resume** (`>` redirect), so after preemptions these hold only the latest segment — the run dir's `metrics.jsonl` is the complete record (and the input `recover_metrics.py` actually needs is whatever segments you still have). |
 
 ### What to watch, per stage
 
