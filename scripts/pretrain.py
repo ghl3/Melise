@@ -435,7 +435,7 @@ def main() -> None:
         # Legacy --data path: hold out the last val_frac of every file.
         splits = {p: (1.0 - args.val_frac, args.val_frac) for p in args.data}
 
-    train_data, val_data, val_bytes, byte_counts = load_data(
+    train_data, val_data, val_bytes, val_paths, byte_counts = load_data(
         args.data, device, splits, tok=tok)
     if mix_mults is not None:
         weights = torch.tensor([b * m for b, m in zip(byte_counts, mix_mults)])
@@ -638,8 +638,8 @@ def main() -> None:
                 # its own number — on long runs this is how you see e.g.
                 # whether the dialogue register is actually being learned.
                 domain_bpb = {}
-                for path, vd in zip(args.data, val_data):
-                    if vd is not None and len(vd) > args.seq_len:
+                for path, vd in zip(val_paths, val_data):
+                    if len(vd) > args.seq_len:
                         _, d_bpb = sampled_val_loss(
                             model, [vd], torch.tensor([1.0]),
                             args.batch_size, args.seq_len,

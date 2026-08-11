@@ -83,9 +83,12 @@ def load_data(paths, device, splits, tok=None):
     canonical last-5% test split) is NEVER loaded here — it stays
     untouched for offline evals. Returned byte counts are raw byte
     sizes, so mixture weighting is encoding-independent.
+
+    val_list/val_bytes/val_paths are compact and parallel to each
+    other, NOT to `paths` — only files with a val slice appear.
     """
     train_list, byte_counts = [], []
-    val_list, val_bytes = [], []
+    val_list, val_bytes, val_paths = [], [], []
     for path in paths:
         if not path.exists():
             raise FileNotFoundError(
@@ -110,8 +113,9 @@ def load_data(paths, device, splits, tok=None):
         if val_end > train_end:
             val_list.append(val)
             val_bytes.append(val_end - train_end)
+            val_paths.append(path)
         byte_counts.append(n)
-    return train_list, val_list, val_bytes, byte_counts
+    return train_list, val_list, val_bytes, val_paths, byte_counts
 
 
 def get_batch(datasets, weights, batch_size, seq_len):
