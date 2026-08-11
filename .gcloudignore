@@ -1,0 +1,14 @@
+# Cloud Run --source upload: the worker image needs only the model code,
+# serve script, tokenizer configs, and staged serve_models/ checkpoints.
+.git/
+.venv/
+.claude/
+data/
+checkpoints/
+web/
+docs/
+tests/
+tutorial/
+__pycache__/
+*.pyc
+.DS_Store
