@@ -9,9 +9,18 @@ function authHeaders(): Record<string, string> {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  // First x-forwarded-for entry is the browser; the worker rate-limits
+  // per client, so it needs this (its own peer is always the proxy).
+  const clientIp =
+    (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() ||
+    "unknown";
   const upstream = await fetch(`${WORKER}/v1/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Client-IP": clientIp,
+      ...authHeaders(),
+    },
     body: await req.text(),
     signal: req.signal, // client abort cancels the worker generation
   });

@@ -31,6 +31,7 @@ import os
 import sys
 import threading
 import time
+from collections import defaultdict, deque
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -183,6 +184,42 @@ def check_auth(request: Request):
         raise HTTPException(401, "bad or missing bearer token")
 
 
+# Sliding-window rate limits, in memory. Correct only because the worker
+# runs as a SINGLE instance (deploy with --max-instances 1; the batch-1
+# semaphore already assumes the same). The proxy forwards the browser's
+# address as X-Client-IP; requests are bearer-authed before this runs,
+# so the header is trustworthy. 0 disables a limit.
+RATE_PER_MIN = int(os.environ.get("RATE_PER_MIN", "20"))
+RATE_GLOBAL_PER_MIN = int(os.environ.get("RATE_GLOBAL_PER_MIN", "120"))
+_GLOBAL = "*"
+_rate_lock = threading.Lock()
+_hits: dict[str, deque] = defaultdict(deque)  # key -> monotonic times
+
+
+def check_rate(request: Request):
+    if RATE_PER_MIN <= 0:
+        return
+    ip = request.headers.get("x-client-ip") \
+        or (request.client.host if request.client else "unknown")
+    now = time.monotonic()
+    with _rate_lock:
+        ip_q, all_q = _hits[ip], _hits[_GLOBAL]
+        for q in (ip_q, all_q):
+            while q and now - q[0] > 60.0:
+                q.popleft()
+        over = ip_q if len(ip_q) >= RATE_PER_MIN else \
+            all_q if RATE_GLOBAL_PER_MIN > 0 and len(all_q) >= RATE_GLOBAL_PER_MIN else None
+        if over is not None:
+            raise HTTPException(
+                429, "rate limit exceeded — try again in a minute",
+                headers={"Retry-After": str(max(1, int(61 - (now - over[0]))))})
+        ip_q.append(now)
+        all_q.append(now)
+        if len(_hits) > 4096:  # drop idle IPs so the dict can't grow forever
+            for k in [k for k, q in _hits.items() if not q]:
+                del _hits[k]
+
+
 @app.get("/healthz", response_class=PlainTextResponse)
 def healthz():
     return "ok" if MODELS else PlainTextResponse("loading", status_code=503)
@@ -198,7 +235,7 @@ def models():
     ]
 
 
-@app.post("/v1/chat", dependencies=[Depends(check_auth)])
+@app.post("/v1/chat", dependencies=[Depends(check_auth), Depends(check_rate)])
 def chat(req: ChatRequest):
     name = req.model or next(iter(MODELS))
     entry = MODELS.get(name)
