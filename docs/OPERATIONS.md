@@ -202,6 +202,7 @@ iterating on post-training without touching the base model.
 | audit training data | `scripts/sample_data.py` (stage-aware; a 500-conversation random audit beats any dataset card) |
 | rebuild TB from metrics | `scripts/rebuild_tb.py <run-dir>` (`tb/` is derived; `metrics.jsonl` is truth) |
 | rebuild metrics from logs | `scripts/recover_metrics.py <stage log> <run-dir>` then `rebuild_tb.py` (disaster path — stdout logs carry the full metric history) |
+| preemption history | `gcloud compute operations list --zones=us-central1-a --filter="targetLink~kimi3-train AND operationType=compute.instances.preempted" --format="value(insertTime)"` — timestamps are laptop-local; drop the operationType clause to see start attempts too (`error.errors[0].code` = `ZONE_RESOURCE_POOL_EXHAUSTED…` marks failed capacity attempts; a completed op reads DONE either way). Downtime per preemption = gap to the next errorless start, +~3 min boot/resume (cross-check `resuming` stamps in `~/pipeline.log`, UTC). |
 
 ## Completion
 
