@@ -69,12 +69,15 @@ explicitly excludes the new files), so old runs remain reproducible.
 
 | Change | Dataset | Size | Mult | Share |
 |---|---|---|---|---|
-| added | fineweb-edu | 101.0 MB | ×0.14 | 9.2% | 
-| added | dialogue-movies (Cornell) + dialogue-daily (DailyDialog) | 24.1 MB | ×0.3 | 4.7% |
-| trimmed | math-openweb | 101.0 MB | ×0.15 → ×0.05 | 10.7% → 3.3% |
+| added | fineweb-edu | 402.3 MB | ×0.07 | 16.8% |
+| added | dialogue-movies (Cornell) + dialogue-daily (DailyDialog) | 24.1 MB | ×0.3 | 4.3% |
+| trimmed | math-openweb | 101.0 MB | ×0.15 → ×0.05 | 10.7% → 3.0% |
 
-Everything else keeps its weight and dilutes slightly (wikitext →
-35.4%, books → 29.8%, code → 9.8%, enwik8 → 5.9%). The dialogue files
+(FineWeb-Edu was first added at 101 MB ×0.14 ≈ 9.2%, then expanded to
+402 MB with the multiplier retuned to ×0.07 — twice the share, four
+times the unique text.) Everything else keeps its weight and dilutes
+(wikitext → 32.2%, books → 27.1%, code → 8.9%, enwik8 → 6.0%; shares
+verified against the gen-3 launch banner). The dialogue files
 are dash-prefixed plain-text transcripts (NOT the chat template — the
 `dialogue_` prefix keeps them out of sft.py's `chat_*` glob and out of
 the pinned gen-2 mix). FineWeb-Edu is fetched by `prep_fineweb.py` via
