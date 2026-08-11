@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "lily",
+  title: "melise",
   description:
-    "lily — chat with tiny transformers trained from scratch (transformer-learning).",
+    "melise — chat with tiny transformers trained from scratch (transformer-learning).",
 };
 
 export default function RootLayout({

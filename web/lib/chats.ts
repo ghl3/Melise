@@ -7,7 +7,9 @@ export interface SavedChat {
   updated: number;
 }
 
-const KEY = "lily-chats-v1";
+const KEY = "melise-chats-v1";
+// The previous multi-chat key (same SavedChat[] shape) — copied forward once.
+const PRIOR_KEY = "lily-chats-v1";
 // Pre-multi-chat storage (single conversation) — migrated once, then unused.
 const LEGACY_KEYS = ["elsa-v1", "flora-v1", "forest-chat-v1"];
 
@@ -15,6 +17,12 @@ export function loadChats(): SavedChat[] {
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) return JSON.parse(raw) as SavedChat[];
+    const prior = localStorage.getItem(PRIOR_KEY);
+    if (prior) {
+      const chats = JSON.parse(prior) as SavedChat[];
+      saveChats(chats);
+      return chats;
+    }
     for (const key of LEGACY_KEYS) {
       const old = localStorage.getItem(key);
       if (!old) continue;

@@ -163,7 +163,7 @@ export default function Chat() {
           <div className="flex items-baseline gap-3">
             <span aria-hidden className="text-xl text-moss">❦</span>
             <div>
-              <h1 className="text-lg font-semibold tracking-tight">lily</h1>
+              <h1 className="text-lg font-semibold tracking-tight">melise</h1>
               <p className="text-xs text-dim">
                 tiny transformers, trained from scratch
               </p>

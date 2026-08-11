@@ -63,7 +63,7 @@ export default function MessageList({ messages, draft, samples, onSample }: {
       <div className="flex flex-1 select-none items-center justify-center">
         <div className="max-w-md rounded-2xl border border-line bg-panel/70 p-6 text-center">
           <p className="text-sm leading-relaxed text-dim">
-            You&apos;re talking to lily — a{" "}
+            You&apos;re talking to melise — a{" "}
             <span className="text-moss-soft">19M-parameter transformer</span>{" "}
             trained from scratch: pretrained on public-domain books, taught to
             chat with SFT, then RL-tuned on five tiny verifiable tasks. A forest
