@@ -88,6 +88,25 @@ L4 constraints to re-probe for any change: gen-3 medium ran b5 @
 
 ### 2. Data mix
 
+- **Grouped corpora (user proposal, 2026-08-14): scale registers,
+  not files.** Today every ×1.0 book rides at its byte-size share —
+  the ~30 books implicitly claim ~28% of the gradient at ~28
+  effective epochs each, an allocation nobody chose. Gen-4: mix
+  config gains *groups* (glob + one computed multiplier hitting a
+  target share; keep files separate — do NOT concatenate, per-file
+  val splits break). Proposed groups: **fiction** (~22 novels + 10–20
+  new Gutenberg acquisitions incl. some 20th-c. public domain),
+  **nonfiction** (Darwin/Smith/Descartes/…), **drama**
+  (Shakespeare×2 — the play register; scale near dialogue), plus the
+  existing majors (fineweb, wikitext, enwik8, dialogue, code, math).
+  Adding books then dilutes per-book epochs at fixed share instead of
+  silently growing fiction. Lean: fiction ~15% (→ ~14 epochs at 2.2B
+  on a ~75MB group, vs 27 today); freeze the number with the
+  forgetting evals in hand. Instrumentation: group-level val slices
+  (one honest val_domain/fiction curve), war_and_peace keeps its
+  individual slice for cross-gen continuity, 2 new books held out of
+  training entirely, memorization gap per group. Needs the small
+  load_data_mix group extension — pre-launch code.
 - **Trim breadth?** For a chat product: does `code_python` (×0.15)
   earn its capacity? `math_openweb` (×0.05)? `webster_dictionary`?
   Every dropped MB is capacity handed to thesis domains — the
