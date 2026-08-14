@@ -123,9 +123,7 @@ L4 constraints to re-probe for any change: gen-3 medium ran b5 @
   | wikitext | 541 | 32.2% | **16%** | 2.1 |
   | enwik8 | 100 | 6.0% | **5%** | 3.5 |
   | dialogue | 24 | 4.3% | **5%** | 14.7 (→8% only if corpus grows) |
-  | fiction | 33 (32 books) | 14.9% | **10%** | 21.5 (was ~28) |
-  | nonfiction | 14 | 8.4% | **3%** | 15.1 |
-  | drama | 6.5 | 3.9% | **2%** | 21.7 |
+  | books (45 works: fiction+nonfiction+drama, user call) | 54 | 27.2% | **15%** | 19.9 (was ~28) |
   | code | 100 | 8.9% | **8%** | 5.7 |
   | math | 101 | 3.0% | **4%** | 2.8 |
   | reference (webster) | 28 | 1.7% | **1%** | 2.5 |

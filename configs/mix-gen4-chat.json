@@ -14,7 +14,7 @@
       "include": ["data/dialogue_movies.txt", "data/dialogue_daily.txt"],
       "share": 0.05
     },
-    "fiction": {
+    "books": {
       "include": [
         "data/alice.txt", "data/anna_karenina.txt", "data/brothers_karamazov.txt",
         "data/david_copperfield.txt", "data/don_quixote.txt", "data/frankenstein.txt",
@@ -28,23 +28,15 @@
         "data/tom_sawyer.txt", "data/call_of_the_wild.txt",
         "data/heart_of_darkness.txt", "data/crime_and_punishment.txt",
         "data/madame_bovary.txt", "data/age_of_innocence.txt",
-        "data/little_women.txt", "data/great_gatsby.txt"
-      ],
-      "share": 0.10
-    },
-    "nonfiction": {
-      "include": [
+        "data/little_women.txt", "data/great_gatsby.txt",
         "data/bible_kjv.txt", "data/decline_and_fall_v1.txt",
         "data/descent_of_man.txt", "data/discourse_on_method.txt",
         "data/meditations.txt", "data/origin_of_species.txt", "data/relativity.txt",
         "data/treatise_on_light.txt", "data/voyage_of_the_beagle.txt",
-        "data/walden.txt", "data/wealth_of_nations.txt"
+        "data/walden.txt", "data/wealth_of_nations.txt",
+        "data/shakespeare_complete.txt", "data/tinyshakespeare.txt"
       ],
-      "share": 0.03
-    },
-    "drama": {
-      "include": ["data/shakespeare_complete.txt", "data/tinyshakespeare.txt"],
-      "share": 0.02
+      "share": 0.15
     },
     "code": {"include": "data/code_python.txt", "share": 0.08},
     "math": {"include": "data/math_openweb.txt", "share": 0.04},
