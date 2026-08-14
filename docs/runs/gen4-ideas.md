@@ -143,6 +143,16 @@ L4 constraints to re-probe for any change: gen-3 medium ran b5 @
 - **More dialogue?** It's the product register and it improved
   steadily without saturating — consider a bigger share.
 - Keep fineweb-edu at 400MB scale; it was the engine of this run.
+- **Fineweb prefix bias (measured 2026-08-14):** prep_fineweb.py takes
+  a sequential prefix of sample-10BT shard 0, and the shard is
+  dump-CLUSTERED (each 1000-doc row group = one CommonCrawl snapshot,
+  a few dumps interleaved in rotation). Gen-3's 402MB therefore
+  contains exactly 3 of ~95 snapshots: CC-MAIN-2013-20, 2017-26,
+  2020-05 — balanced between them, nothing newer than Jan 2020 (note
+  for the gen-3 results doc: her web knowledge is pre-pandemic).
+  Register impact ~nil; content-recency ceiling real. Gen-4 fix (with
+  the 2GB multi-shard expansion): draw row groups in seeded-random
+  order across all 14 shards so every dump is represented.
 
 ### 3. Eval / metrics / tooling
 
