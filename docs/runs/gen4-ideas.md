@@ -107,6 +107,32 @@ L4 constraints to re-probe for any change: gen-3 medium ran b5 @
   individual slice for cross-gen continuity, 2 new books held out of
   training entirely, memorization gap per group. Needs the small
   load_data_mix group extension — pre-launch code.
+
+  **STATUS 2026-08-14: implemented.** `load_data_mix` supports
+  `groups` (glob + `share`; solved to per-file multipliers; tested in
+  tests/test_transformer.py). 16 books downloaded + registered
+  (dracula, jane-eyre, wuthering-heights, dorian-gray, time-machine,
+  war-of-the-worlds, tom-sawyer, call-of-the-wild, heart-of-darkness,
+  crime-and-punishment, madame-bovary, age-of-innocence, little-women,
+  great-gatsby, + holdouts emma, great-expectations). Draft config:
+  `configs/mix-gen4-chat.json` — validated, shares exact:
+
+  | group | MB | gen-3 share | gen-4 target | epochs @2.2B |
+  |---|---|---|---|---|
+  | fineweb | 402→~2000 | 16.8% | **46%** | 1.6 (after expansion; 8.1 before) |
+  | wikitext | 541 | 32.2% | **16%** | 2.1 |
+  | enwik8 | 100 | 6.0% | **5%** | 3.5 |
+  | dialogue | 24 | 4.3% | **5%** | 14.7 (→8% only if corpus grows) |
+  | fiction | 33 (32 books) | 14.9% | **10%** | 21.5 (was ~28) |
+  | nonfiction | 14 | 8.4% | **3%** | 15.1 |
+  | drama | 6.5 | 3.9% | **2%** | 21.7 |
+  | code | 100 | 8.9% | **8%** | 5.7 |
+  | math | 101 | 3.0% | **4%** | 2.8 |
+  | reference (webster) | 28 | 1.7% | **1%** | 2.5 |
+
+  Fiction val canaries: war_and_peace (continuity), sherlock,
+  moby_dick, jane_eyre (a NEW book). Shares are draft — freeze after
+  the forgetting evals + fineweb expansion land.
 - **Trim breadth?** For a chat product: does `code_python` (×0.15)
   earn its capacity? `math_openweb` (×0.05)? `webster_dictionary`?
   Every dropped MB is capacity handed to thesis domains — the

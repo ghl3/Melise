@@ -1,0 +1,62 @@
+{
+  "_comment": "Gen-4 draft mix (2026-08-14): grouped corpora with target shares. Shares sum to 1.0 (every file grouped). fineweb share assumes the 400MB->2GB expansion — REVISIT at freeze if the corpus differs. emma + great_expectations are full holdouts (test-only, never trained). Splits: enwik8/fineweb/dialogue/war carried from gen-3; sherlock/moby/jane_eyre added as fiction forgetting canaries (jane_eyre = a NEW book).",
+  "include": "data/*.txt",
+  "exclude": [
+    "data/chat_*.txt",
+    "data/emma.txt",
+    "data/great_expectations.txt"
+  ],
+  "groups": {
+    "fineweb": {"include": "data/fineweb_edu.txt", "share": 0.46},
+    "wikitext": {"include": "data/wikitext103_train.txt", "share": 0.16},
+    "enwik8": {"include": "data/enwik8.txt", "share": 0.05},
+    "dialogue": {
+      "include": ["data/dialogue_movies.txt", "data/dialogue_daily.txt"],
+      "share": 0.05
+    },
+    "fiction": {
+      "include": [
+        "data/alice.txt", "data/anna_karenina.txt", "data/brothers_karamazov.txt",
+        "data/david_copperfield.txt", "data/don_quixote.txt", "data/frankenstein.txt",
+        "data/grimms_fairy_tales.txt", "data/huckleberry_finn.txt",
+        "data/les_miserables.txt", "data/middlemarch.txt", "data/moby_dick.txt",
+        "data/monte_cristo.txt", "data/pride_prejudice.txt", "data/sherlock.txt",
+        "data/tale_of_two_cities.txt", "data/treasure_island.txt",
+        "data/war_and_peace.txt", "data/wizard_of_oz.txt",
+        "data/dracula.txt", "data/jane_eyre.txt", "data/wuthering_heights.txt",
+        "data/dorian_gray.txt", "data/time_machine.txt", "data/war_of_the_worlds.txt",
+        "data/tom_sawyer.txt", "data/call_of_the_wild.txt",
+        "data/heart_of_darkness.txt", "data/crime_and_punishment.txt",
+        "data/madame_bovary.txt", "data/age_of_innocence.txt",
+        "data/little_women.txt", "data/great_gatsby.txt"
+      ],
+      "share": 0.10
+    },
+    "nonfiction": {
+      "include": [
+        "data/bible_kjv.txt", "data/decline_and_fall_v1.txt",
+        "data/descent_of_man.txt", "data/discourse_on_method.txt",
+        "data/meditations.txt", "data/origin_of_species.txt", "data/relativity.txt",
+        "data/treatise_on_light.txt", "data/voyage_of_the_beagle.txt",
+        "data/walden.txt", "data/wealth_of_nations.txt"
+      ],
+      "share": 0.03
+    },
+    "drama": {
+      "include": ["data/shakespeare_complete.txt", "data/tinyshakespeare.txt"],
+      "share": 0.02
+    },
+    "code": {"include": "data/code_python.txt", "share": 0.08},
+    "math": {"include": "data/math_openweb.txt", "share": 0.04},
+    "reference": {"include": "data/webster_dictionary.txt", "share": 0.01}
+  },
+  "splits": {
+    "data/enwik8.txt": {"train": 0.9, "val": 0.05, "test": 0.05},
+    "data/fineweb_edu.txt": {"train": 0.995, "val": 0.005},
+    "data/dialogue_movies.txt": {"train": 0.99, "val": 0.01},
+    "data/war_and_peace.txt": {"train": 0.99, "val": 0.01},
+    "data/sherlock.txt": {"train": 0.98, "val": 0.02},
+    "data/moby_dick.txt": {"train": 0.99, "val": 0.01},
+    "data/jane_eyre.txt": {"train": 0.99, "val": 0.01}
+  }
+}

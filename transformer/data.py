@@ -159,6 +159,8 @@ def load_data_mix(mix_path):
         {"include": "data/*.txt",                     # glob or list of globs
          "exclude": "data/chat_*.txt",                # glob(s) removed after include
          "multipliers": {"data/enwik8.txt": 0.1},     # default 1.0
+         "groups": {                                  # optional, see below
+            "fiction": {"include": "data/books/*.txt", "share": 0.10}},
          "splits": {                                  # default: 100% train
             "data/enwik8.txt": {"train": 0.90, "val": 0.05, "test": 0.05}}}
 
@@ -166,6 +168,18 @@ def load_data_mix(mix_path):
     fraction is reserved — pretraining never loads it (offline evals do).
     "exclude" exists so stage-specific corpora sharing data/ (the SFT
     chat files) can't silently leak into pretraining.
+
+    "groups" treats a set of files as one coherent corpus with a target
+    share of the total sampling weight. Each group's files get a common
+    multiplier m_g solved so that m_g·bytes_g / total_weight = share —
+    so within a group, files are sampled by byte size (uniform effective
+    epochs), and the group's gradient share is the single knob. Grouped
+    files may not also appear in "multipliers" (ambiguous), nor in two
+    groups. Ungrouped files keep their explicit/default multipliers;
+    group shares are fractions of the SAME total, so with ungrouped
+    files present, shares must sum to < 1 (the remainder is the
+    ungrouped files' share). If every file is grouped, shares are the
+    weights directly and should sum to 1.
 
     Returns (paths, multipliers, splits) with multipliers aligned to
     paths and splits keyed by path. Keys may be project-relative paths or
@@ -217,6 +231,47 @@ def load_data_mix(mix_path):
         raise SystemExit(
             f"--data-mix: keys match no included file: {sorted(unmatched)}"
         )
+
+    groups = mix.get("groups", {})
+    if groups:
+        path_idx = {p: i for i, p in enumerate(paths)}
+        grouped: dict = {}  # path -> group name
+        members: dict = {}  # group name -> [paths]
+        for gname, spec in groups.items():
+            gincludes = spec["include"]
+            if isinstance(gincludes, str):
+                gincludes = [gincludes]
+            gpaths = sorted({p for g in gincludes for p in PROJECT_ROOT.glob(g)} & set(paths))
+            if not gpaths:
+                raise SystemExit(f"--data-mix: group {gname!r} matched no included file")
+            for p in gpaths:
+                if p in grouped:
+                    raise SystemExit(
+                        f"--data-mix: {p.name} is in groups {grouped[p]!r} and {gname!r}")
+                if mult_of(p) is not None:
+                    raise SystemExit(
+                        f"--data-mix: {p.name} is in group {gname!r} AND has an "
+                        "explicit multiplier — use one or the other")
+                grouped[p] = gname
+            members[gname] = gpaths
+        shares = {g: float(spec["share"]) for g, spec in groups.items()}
+        total_share = sum(shares.values())
+        fixed_weight = sum(
+            p.stat().st_size * mults[path_idx[p]] for p in paths if p not in grouped)
+        if fixed_weight > 0:
+            if total_share >= 1.0 - 1e-9:
+                raise SystemExit(
+                    f"--data-mix: group shares sum to {total_share:.3f} but ungrouped "
+                    "files exist — shares must sum to < 1 to leave them room")
+            total_weight = fixed_weight / (1.0 - total_share)
+        else:
+            total_weight = 1.0  # all files grouped: shares ARE the (relative) weights
+        for gname, gpaths in members.items():
+            group_bytes = sum(p.stat().st_size for p in gpaths)
+            m_g = shares[gname] * total_weight / group_bytes
+            for p in gpaths:
+                mults[path_idx[p]] = m_g
+
     return paths, mults, splits
 
 

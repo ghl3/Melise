@@ -80,6 +80,25 @@ ORIGINS: dict[str, tuple[str, str, str]] = {
     "middlemarch": ("https://www.gutenberg.org/files/145/145-0.txt", "middlemarch.txt", "gutenberg"),
     "brothers-karamazov": ("https://www.gutenberg.org/files/28054/28054-0.txt", "brothers_karamazov.txt", "gutenberg"),
     "grimms": ("https://www.gutenberg.org/files/2591/2591-0.txt", "grimms_fairy_tales.txt", "gutenberg"),
+    # Gen-4 fiction expansion (2026-08-14): diversify the fiction group —
+    # new authors, era spread incl. 1920s public domain. emma and
+    # great-expectations are FULL HOLDOUTS (never trained; test-only).
+    "dracula": ("https://www.gutenberg.org/cache/epub/345/pg345.txt", "dracula.txt", "gutenberg"),
+    "jane-eyre": ("https://www.gutenberg.org/cache/epub/1260/pg1260.txt", "jane_eyre.txt", "gutenberg"),
+    "wuthering-heights": ("https://www.gutenberg.org/cache/epub/768/pg768.txt", "wuthering_heights.txt", "gutenberg"),
+    "dorian-gray": ("https://www.gutenberg.org/cache/epub/174/pg174.txt", "dorian_gray.txt", "gutenberg"),
+    "time-machine": ("https://www.gutenberg.org/cache/epub/35/pg35.txt", "time_machine.txt", "gutenberg"),
+    "war-of-the-worlds": ("https://www.gutenberg.org/cache/epub/36/pg36.txt", "war_of_the_worlds.txt", "gutenberg"),
+    "emma": ("https://www.gutenberg.org/cache/epub/158/pg158.txt", "emma.txt", "gutenberg"),
+    "great-expectations": ("https://www.gutenberg.org/cache/epub/1400/pg1400.txt", "great_expectations.txt", "gutenberg"),
+    "tom-sawyer": ("https://www.gutenberg.org/cache/epub/74/pg74.txt", "tom_sawyer.txt", "gutenberg"),
+    "call-of-the-wild": ("https://www.gutenberg.org/cache/epub/215/pg215.txt", "call_of_the_wild.txt", "gutenberg"),
+    "heart-of-darkness": ("https://www.gutenberg.org/cache/epub/219/pg219.txt", "heart_of_darkness.txt", "gutenberg"),
+    "crime-and-punishment": ("https://www.gutenberg.org/cache/epub/2554/pg2554.txt", "crime_and_punishment.txt", "gutenberg"),
+    "madame-bovary": ("https://www.gutenberg.org/cache/epub/2413/pg2413.txt", "madame_bovary.txt", "gutenberg"),
+    "age-of-innocence": ("https://www.gutenberg.org/cache/epub/541/pg541.txt", "age_of_innocence.txt", "gutenberg"),
+    "little-women": ("https://www.gutenberg.org/cache/epub/514/pg514.txt", "little_women.txt", "gutenberg"),
+    "great-gatsby": ("https://www.gutenberg.org/cache/epub/64317/pg64317.txt", "great_gatsby.txt", "gutenberg"),
     "enwik8": ("https://mattmahoney.net/dc/enwik8.zip", "enwik8.txt", "zip:enwik8"),
     "wikitext-103": (
         "https://wikitext.smerity.com/wikitext-103-raw-v1.zip",

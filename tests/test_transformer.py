@@ -230,6 +230,75 @@ def test_kimi3_layer_layout():
     assert all(m.d_rope == 0 and m.gate_proj is not None for m in mlas)
 
 
+def test_data_mix_groups():
+    """Group shares compile to per-file multipliers: within-group files
+    sample by byte size (uniform epochs), group share is exact, and the
+    ambiguous/overlapping configs are rejected."""
+    import json
+    import shutil
+    import tempfile
+
+    from transformer.data import PROJECT_ROOT, load_data_mix
+
+    tmp = Path(tempfile.mkdtemp(dir=PROJECT_ROOT, prefix="_tmp_mix_"))
+    rel = tmp.relative_to(PROJECT_ROOT)
+    try:
+        (tmp / "a.txt").write_bytes(b"x" * 100)
+        (tmp / "b.txt").write_bytes(b"x" * 300)
+        (tmp / "c.txt").write_bytes(b"x" * 600)
+
+        def load(mix):
+            mp = tmp / "mix.json"
+            mp.write_text(json.dumps(mix))
+            return load_data_mix(mp)
+
+        # Two grouped files at share 0.4, one ungrouped at multiplier 0.5:
+        # fixed = 600*0.5 = 300 → total = 300/(1-0.4) = 500 → m_g = 0.4*500/400.
+        paths, mults, _ = load({
+            "include": f"{rel}/[abc].txt",
+            "groups": {"g": {"include": [f"{rel}/a.txt", f"{rel}/b.txt"],
+                             "share": 0.4}},
+            "multipliers": {f"{rel}/c.txt": 0.5},
+        })
+        assert [p.name for p in paths] == ["a.txt", "b.txt", "c.txt"]
+        weights = [p.stat().st_size * m for p, m in zip(paths, mults)]
+        total = sum(weights)
+        assert abs((weights[0] + weights[1]) / total - 0.4) < 1e-9
+        assert abs(mults[0] - mults[1]) < 1e-12  # same multiplier within group
+
+        # All files grouped: shares are the relative weights directly.
+        paths, mults, _ = load({
+            "include": f"{rel}/[abc].txt",
+            "groups": {
+                "g1": {"include": [f"{rel}/a.txt", f"{rel}/b.txt"], "share": 0.7},
+                "g2": {"include": f"{rel}/c.txt", "share": 0.3},
+            },
+        })
+        weights = [p.stat().st_size * m for p, m in zip(paths, mults)]
+        total = sum(weights)
+        assert abs((weights[0] + weights[1]) / total - 0.7) < 1e-9
+
+        # Rejected: file in two groups; grouped file with explicit
+        # multiplier; shares >= 1 alongside ungrouped files.
+        for bad in (
+            {"include": f"{rel}/[abc].txt",
+             "groups": {"g1": {"include": f"{rel}/a.txt", "share": 0.2},
+                        "g2": {"include": f"{rel}/[ab].txt", "share": 0.2}}},
+            {"include": f"{rel}/[abc].txt",
+             "multipliers": {f"{rel}/a.txt": 2.0},
+             "groups": {"g": {"include": f"{rel}/a.txt", "share": 0.2}}},
+            {"include": f"{rel}/[abc].txt",
+             "groups": {"g": {"include": f"{rel}/a.txt", "share": 1.0}}},
+        ):
+            try:
+                load(bad)
+                raise AssertionError(f"config should have been rejected: {bad}")
+            except SystemExit:
+                pass
+    finally:
+        shutil.rmtree(tmp)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
