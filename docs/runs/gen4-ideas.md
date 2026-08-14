@@ -88,8 +88,7 @@ L4 constraints to re-probe for any change: gen-3 medium ran b5 @
 
 ### 2. Data mix
 
-- **Grouped corpora (user proposal, 2026-08-14): scale registers,
-  not files.** Today every ×1.0 book rides at its byte-size share —
+- **Grouped corpora: scale registers, not files.** Today every ×1.0 book rides at its byte-size share —
   the ~30 books implicitly claim ~28% of the gradient at ~28
   effective epochs each, an allocation nobody chose. Gen-4: mix
   config gains *groups* (glob + one computed multiplier hitting a
@@ -123,7 +122,7 @@ L4 constraints to re-probe for any change: gen-3 medium ran b5 @
   | wikitext | 541 | 32.2% | **16%** | 2.1 |
   | enwik8 | 100 | 6.0% | **5%** | 3.5 |
   | dialogue | 24 | 4.3% | **5%** | 14.7 (→8% only if corpus grows) |
-  | books (45 works: fiction+nonfiction+drama, user call) | 54 | 27.2% | **15%** | 19.9 (was ~28) |
+  | books (45 works: fiction+nonfiction+drama) | 54 | 27.2% | **15%** | 19.9 (was ~28) |
   | code | 100 | 8.9% | **8%** | 5.7 |
   | math | 101 | 3.0% | **4%** | 2.8 |
   | reference (webster) | 28 | 1.7% | **1%** | 2.5 |
@@ -204,7 +203,7 @@ param share at this scale. Revisit only with d=512-class capacity.
 - Keep: restarter + boot-resume machinery (works on-demand too, as
   the stockout recovery showed), bucket-backed TB, BucketSync.
 
-## Gen-4 proposal v1 (user-decided direction, 2026-08-14)
+## Gen-4 proposal v1 (2026-08-14)
 
 **Width AND experts AND data.** Model: d=512, 3 blocks / 13 attn
 layers (deliberately NOT the large preset's 4 — depth held to cap
