@@ -118,6 +118,20 @@ L4 constraints to re-probe for any change: gen-3 medium ran b5 @
   held-out text per domain through best.pt, log top-4 routing per
   layer, heat-map it. Run on the VM post-pipeline (gen-3 homework
   that informs the gen-4 architecture choice).
+- **lm_head SVD across checkpoints**: singular-value spectrum of the
+  8192×d unembedding over saved step_*.pt — is effective head rank
+  flattening late in the run? (Softmax-bottleneck check, Godey et
+  al.; see docs/papers/. Cheap CPU analysis.)
+- **Fully-held-out books**: exclude 1–2 books from training entirely
+  as pure test domains — uncontaminated register generalization,
+  free of the book-familiarity flattery that within-book val slices
+  carry. (Context: mixture math gives every ×1.0 book ~28 effective
+  epochs/gen — partial verbatim memorization of small corpora is
+  expected, ~3.6 bits/param ≈ ~30MB capacity at 72M.)
+- **Memorization gap**: eval_checkpoint the same checkpoint on a
+  book's train slice vs val slice; the gap is a per-domain
+  memorization index. Track it gen-3 → gen-4 to see whether added
+  capacity buys generalization or recitation. VM, nearly free.
 
 ### 4. Tokenizer
 
