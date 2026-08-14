@@ -147,6 +147,27 @@ param share at this scale. Revisit only with d=512-class capacity.
 - Keep: restarter + boot-resume machinery (works on-demand too, as
   the stockout recovery showed), bucket-backed TB, BucketSync.
 
+## Working draft — decided direction (user call, 2026-08-14)
+
+**Do both: width AND experts, plus data.** d=512 (3 blocks / 13 attn
+layers — NOT the large preset's 4), n_heads=16, 40 routed experts
+top-4, K3 shape rules for the rest (latent 256, expert_hidden 256,
+shared 1024, dense 2048), bpe8k unchanged.
+
+- **163.2M total / 78.3M active** (×2.26 / ×1.72 over gen-3); routed
+  pool triples to 94.4M — the eviction result's budget line.
+- **Token budget ~2.2B** (13.5 tok/total-param, 28 tok/active —
+  between the two Chinchilla readings for MoE). Per-expert diet stays
+  ≈ gen-3 (220M vs 247M tok/expert).
+- **Corpus: expand fineweb-edu 400MB → ~2GB** first (→ ~1.05B unique
+  tokens, ~2 effective epochs); grow dialogue too if a source exists.
+  Mix weights recomputed at recipe freeze.
+- **Est. ~2.2k tok/s** (FLOPs-scaled; method retro-predicts large
+  preset's measured 1.8k). Batch likely 4. **~11.6d pretrain + ~1.5d
+  post ≈ 13 days, ~$270 on-demand.** Floor option: 1.5B tokens ≈
+  9.5d. Probe memory before freeze; GRPO is the high-water mark.
+- Serving: active ×1.72 → Cloud Run CPU latency check at swap time.
+
 ## Deferred by explicit user decision (need sign-off to start)
 
 d=512 · bpe16k · DPO (standing since 2026-08-11 handoff; d=512 is
