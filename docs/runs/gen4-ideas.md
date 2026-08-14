@@ -147,26 +147,101 @@ param share at this scale. Revisit only with d=512-class capacity.
 - Keep: restarter + boot-resume machinery (works on-demand too, as
   the stockout recovery showed), bucket-backed TB, BucketSync.
 
-## Working draft — decided direction (user call, 2026-08-14)
+## Gen-4 proposal v1 (user-decided direction, 2026-08-14)
 
-**Do both: width AND experts, plus data.** d=512 (3 blocks / 13 attn
-layers — NOT the large preset's 4), n_heads=16, 40 routed experts
-top-4, K3 shape rules for the rest (latent 256, expert_hidden 256,
-shared 1024, dense 2048), bpe8k unchanged.
+**Width AND experts AND data.** Model: d=512, 3 blocks / 13 attn
+layers (deliberately NOT the large preset's 4 — depth held to cap
+FLOPs), n_heads=16 (head_dim 32), **40 routed experts** top-4, K3
+shape rules for the rest (kv_lora 128, kda_decay_rank 32, latent 256,
+expert_hidden 256, shared 1024, dense 2048), bpe8k, ctx 2048.
 
-- **163.2M total / 78.3M active** (×2.26 / ×1.72 over gen-3); routed
-  pool triples to 94.4M — the eviction result's budget line.
-- **Token budget ~2.2B** (13.5 tok/total-param, 28 tok/active —
-  between the two Chinchilla readings for MoE). Per-expert diet stays
-  ≈ gen-3 (220M vs 247M tok/expert).
-- **Corpus: expand fineweb-edu 400MB → ~2GB** first (→ ~1.05B unique
-  tokens, ~2 effective epochs); grow dialogue too if a source exists.
-  Mix weights recomputed at recipe freeze.
-- **Est. ~2.2k tok/s** (FLOPs-scaled; method retro-predicts large
-  preset's measured 1.8k). Batch likely 4. **~11.6d pretrain + ~1.5d
-  post ≈ 13 days, ~$270 on-demand.** Floor option: 1.5B tokens ≈
-  9.5d. Probe memory before freeze; GRPO is the high-water mark.
-- Serving: active ×1.72 → Cloud Run CPU latency check at swap time.
+Parameter budget (counted, not estimated — CPU-instantiated):
+
+| | gen-3 | gen-4 v1 | × |
+|---|---|---|---|
+| total | 72.1M | **163.2M** | 2.26 |
+| active/token | 45.6M | **78.3M** | 1.72 |
+| routed pool | 31.9M | 94.4M | 2.96 |
+| active/total | 63% | 48% | sparser |
+
+Width fattens each expert (1.33M→2.36M) while count grows 24→40: the
+storage pool — where the eviction result lives — triples, at only
+1.72× compute.
+
+**Data**: expand fineweb-edu 400MB → ~2GB (→ corpus ~1.05B unique
+tokens, ~2 effective epochs at the 2.2B budget); grow dialogue too if
+a source exists (thesis domain, only 24MB). Mix weights recomputed at
+freeze. Per-expert diet stays ≈ gen-3 (220M vs 247M tok/expert), so
+40-way routing doesn't thin the slices.
+
+**Token budget** (freeze AFTER the throughput probe, see below).
+Chinchilla is ambiguous for MoE — 3.3B by total params, 1.6B by
+active; recommendation 2.2B:
+
+| tokens | tok/total | tok/active | est. wall-clock (end-to-end) | ~cost |
+|---|---|---|---|---|
+| 1.5B floor | 9.2 | 19.2 | ~9.5d | $195 |
+| **2.2B rec.** | 13.5 | 28.1 | **~13d** | $270 |
+| 3.3B max | 20.2 | 42.1 | ~19d | $390 |
+
+Assumes ~2.2k tok/s (FLOPs-scaled from gen-3's measured 4.1k; method
+retro-predicts the large preset's measured 1.8k within ~5%), batch
+b5→b4, on-demand from launch (zero preemptions; Spot discount thin —
+verify invoice). SFT grows to ~21h, GRPO ~10h. GRPO stays the memory
+high-water mark; toy-pipeline validation mandatory as always.
+
+**Kept, deliberately (reviewed 2026-08-14):**
+- **KDA/MLA 3:1 hybrid + NoPE** — trains stably, and it is the
+  *faster-training* option: vanilla full attention at 2048 ctx would
+  cost +10–20% step time (+1–1.5d) for likely-neutral quality, and
+  its costs grow with any future ctx increase. Decision rule: if
+  gen-3's recall evals / chat battery come back weak, revisit — KDA's
+  fixed 32×32/head state and 4-of-13 exact-attention layers are the
+  suspect, and a vanilla or 2:1 variant becomes a capability trade,
+  not a taste trade. (Vanilla footnote: it would actually *save*
+  ~2.6M attn params; serving cache 4MB → ~110MB/session — fine at
+  concurrency 1.)
+- **AttnRes (full form)** — ~free (0.01M params), two generations
+  stable, and mechanistically points the right way for our diagnosed
+  interference problem (stages choose which prior outputs to read
+  instead of sharing one overwrite-prone stream). Least-studied
+  component — first suspect if a run behaves unexplainably. Ablation
+  vs plain residuals possible via deepseek.py but loses the GPU-day
+  priority fight.
+- Depth, bpe8k, pipeline: unchanged. bpe16k now architecturally
+  viable at d=512 (d/V 6.3→3.1%… still fine; embed+head ~10%) but
+  stays deferred — gen-5 with the width already banked.
+
+**Open at freeze:**
+- [ ] **LR schedule: cosine vs WSD.** WSD (hold + brancheable decay)
+      fits a 13-day time-sensitive run: decay-and-ship whenever the
+      curve says so, extend without surgery. Touches resume logic +
+      best.pt semantics — decide explicitly.
+- [ ] **Throughput/memory probe** of the exact config on the VM
+      (~1h, between gens): real tok/s + peak GiB + batch → then
+      freeze token budget. ±10% throughput = ±1.3 days.
+- [ ] Eval fixes land BEFORE launch (nothing changes mid-run):
+      best.pt by windowed val_bpb; fixed-window per-domain evals;
+      multi-prompt sample battery (one per register, greedy+temp);
+      val slices on 2–3 more books.
+- [ ] Mix weights + small-domain policy (accept eviction / floors /
+      late replay) — informed by gen-3's final forgetting evals.
+- [ ] Identity: bake Melise as dominant preamble name? (after gen-3
+      identity evals)
+- [ ] SFT/GRPO budgets at the new scale (keep 20k/600? decide with
+      gen-3 post-training results in hand)
+- [ ] Serving latency check at swap: active ×1.72 on Cloud Run CPU.
+
+**Inter-generation work queue** (keeps GPU idle time ~zero): gen-3
+post-run ritual (results/NOTEBOOK/memories/chat battery/model swap +
+expert-routing map — the routing map doubles as 40-expert due
+diligence) → fineweb expansion via add_dataset.py → eval/sampling
+diffs → new preset config → probe → toy pipeline → freeze recipe as
+gen4-medium-wide.md → launch.
+
+Gen-5 pile (not gen-4): bpe16k, MTP (data-efficiency lever — relevant
+now that unique tokens are the binding constraint), attention-ratio
+revisit per recall results, AttnRes ablation.
 
 ## Deferred by explicit user decision (need sign-off to start)
 
