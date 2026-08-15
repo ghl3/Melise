@@ -184,6 +184,15 @@ L4 constraints to re-probe for any change: gen-3 medium ran b5 @
   book's train slice vs val slice; the gap is a per-domain
   memorization index. Track it gen-3 → gen-4 to see whether added
   capacity buys generalization or recitation. VM, nearly free.
+- **Eviction anatomy** (post-gen-3, VM): per-token p_true/rank/entropy
+  on the war val slice, bucketed by token class (rare/names vs
+  common), for best.pt (126.5k) vs final — does the decay-phase climb
+  come from rank loss or from sharpened-but-generic mass (confidence
+  misallocation)? Prediction: mostly the latter.
+- **Keeper checkpoints**: gen-3's pruning left no floor-era (~52k)
+  checkpoint, killing the clean before/after eviction diff. Gen-4:
+  keep a sparse milestone checkpoint every ~25k steps exempt from
+  pruning (few GB in the bucket buys post-hoc science).
 
 ### 4. Tokenizer
 
