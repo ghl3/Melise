@@ -298,7 +298,14 @@ high-water mark; toy-pipeline validation mandatory as always.
 - [ ] Eval fixes land BEFORE launch (nothing changes mid-run):
       best.pt by windowed val_bpb; fixed-window per-domain evals;
       multi-prompt sample battery (one per register, greedy+temp);
-      val slices on 2–3 more books.
+      val slices on 2–3 more books; **per-domain accuracy metrics** —
+      val_domain_acc/* (top-1), val_domain_top5/*, val_domain_ent/*
+      (predictive entropy), same per-source in SFT. Free at eval time
+      (logits already in hand) and decomposes bpb moves in realtime:
+      bpb↑+acc-flat+ent↓ = confidence misallocation (the gen-3
+      war_and_peace mystery, diagnosable live); bpb↑+acc↓ = rank
+      loss. NB per-token, not byte-true — within-run diagnostic only,
+      not cross-tokenizer comparable.
 - [ ] Mix weights + small-domain policy (accept eviction / floors /
       late replay) — informed by gen-3's final forgetting evals.
 - [ ] Identity: bake Melise as dominant preamble name? (after gen-3
