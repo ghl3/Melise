@@ -330,6 +330,26 @@ revisit per recall results, AttnRes ablation.
 d=512 · bpe16k · DPO (standing since 2026-08-11 handoff; d=512 is
 the presumptive gen-4 headline but stays here until called).
 
+## Incident 2026-08-16: post-training skipped, shutdown loop
+
+Pretrain finished cleanly (end @145k, 18:55 UTC Aug 15) but SFT never
+started. Working theory (confirm via ~/pipeline.log): the Aug-10
+pre-launch TOY validation run dirs were still the newest sft/rlvr
+dirs on the VM disk, so --resume's stage_done() skipped all
+post-training, ran offline evals, hit PIPELINE_DONE → DONE_CMD. Its
+scheduler-pause half FAILS SILENTLY (VM scopes lack cloudscheduler)
+but the shutdown half works → boot→evals→self-shutdown→restarter
+loop, ~15h (~$9). Recovery: pause restarter (done, from laptop),
+delete toy dirs local+bucket, relaunch `--post-only` with full env.
+Gen-4 fixes:
+- [ ] Pre-launch checklist: DELETE toy/validation run dirs for all
+      stages before the real launch.
+- [ ] pipeline.sh guard: a stage counts as done only if its run dir
+      postdates the upstream stage's end (staleness check).
+- [ ] DONE_CMD: pause-from-VM can never work with current scopes —
+      drop it (leave restarter paused on-demand; automaticRestart
+      covers host errors) or move the pause laptop-side.
+
 ## Blocked on gen-3 completion — revisit each after
 
 - [ ] Final war_and_peace number + decay-tail recovery verdict
