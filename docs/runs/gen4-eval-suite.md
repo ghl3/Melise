@@ -89,14 +89,35 @@ stages:
 - **Consistency** (`probe/identity_consistency`): ask twice in one
   conversation → same-name rate (the Leo→Ivan drift, quantified).
 
-### B3. Instance retrieval (content vs form)
+### B3. Basic facts & instance retrieval (closed-world, verifiable)
 
-- Pretrain form: list-continuation ("Animals: cat, dog, horse,") —
-  count valid instances in the next ~20 tokens against a wordlist →
-  `probe/instances`.
-- Post-train form: "Name an animal / a color / a city." → valid-and-
-  non-echo rate (gen-3's "An animal" echo scores 0). Doubles as the
-  benchmark for whether gen-4's expert-pool capacity buys content.
+A curated fact table (`data/facts.json`, ~300–500 entries), every
+entry carrying an enumerable accepted-answer set — scoring is
+normalized string match (case/punct-insensitive, echo-excluded),
+never a judge. Families:
+
+| family | example | accepted answers |
+|---|---|---|
+| instances | "Name an animal / color / fruit / city." | wordlist membership, non-echo |
+| capitals | "What is the capital of France?" | {paris} (~50 well-known pairs) |
+| attributes | "What color is grass?" / "What sound does a dog make?" | {green} / {woof, bark, barks} |
+| counts | "How many days are in a week?" | {7, seven} |
+| opposites | "What is the opposite of hot?" | {cold} |
+| membership | "Is a dog an animal?" | yes/no |
+
+- Pretrain forms: cloze/continuation ("The capital of France is",
+  "Animals: cat, dog, horse,") scored the same way →
+  `probe/facts/<family>` exists from step 1 of pretraining.
+- **Train/held-out split**: ~70% of the table is rendered into a
+  generated SFT corpus (chat_facts.txt) — enforcement — and 30% is
+  NEVER trained — the held-out rate measures whether the model
+  learned *facts from the mix* vs memorized QA pairs. Report both:
+  `probe/facts/<family>/{train,heldout}`.
+- Optional RLVR `facts` task (verifiable reward off the same table,
+  train split only) if SFT alone leaves headroom.
+- This family is the primary benchmark for the gen-4 capacity bet:
+  gen-3 scores ~0 on all of it ("An animal", "A capital is on the
+  capital"); expert-pool storage should move exactly these numbers.
 
 ### B4. Context-field retrieval: date/time (same family as B2)
 
