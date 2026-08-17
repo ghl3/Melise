@@ -308,6 +308,19 @@ high-water mark; toy-pipeline validation mandatory as always.
 - [ ] **Throughput/memory probe** of the exact config on the VM
       (~1h, between gens): real tok/s + peak GiB + batch → then
       freeze token budget. ±10% throughput = ±1.3 days.
+- [ ] **Probe suite** (full spec + status: `gen4-eval-suite.md`).
+      Core is BUILT (transformer/probes.py, configs/facts.json,
+      scripts/probe_checkpoint.py, tests) and already produced the
+      run's sharpest post-hoc finding: pretrain HAS novel-name
+      induction (0.67) and SFT DESTROYS it (0.00) — the 24-name
+      identity corpus teaches answer-from-pool over copy-from-context.
+      Remaining before launch: wire probes into the three training
+      loops (TB `probe/*` + metrics.jsonl), grow facts.json toward
+      300+, gen_fact_sft (train split only), identity corpus v2
+      (hundreds of names incl. novel strings + dated preambles +
+      ask-twice consistency — capability PRESERVATION, not just
+      enforcement), `context_recall` RLVR task family, serve.py
+      dynamic date in preamble.
 - [ ] Eval fixes land BEFORE launch (nothing changes mid-run):
       best.pt by windowed val_bpb; fixed-window per-domain evals;
       multi-prompt sample battery (one per register, greedy+temp);

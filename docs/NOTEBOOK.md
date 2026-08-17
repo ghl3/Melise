@@ -314,3 +314,108 @@ val_source/identity, dead_frac; daily laptop eval_checkpoint on
 best.pt. After: results into the run doc, chat battery vs gen-2,
 model naming (Wren/Fern/Willa/Flora reserved), Cloud Run + Vercel
 deploys.
+
+## 2026-08-17 — Gen-3 (Melise) complete: −12% test bpb, eviction anatomy, probe suite
+
+**Goal.** Land the full gen-3 run (145k pretrain → SFT → tail → GRPO →
+evals), monitor it to completion, test the product locally, and turn
+what testing revealed into a measurement suite for gen-4.
+
+**Setup.** kimi3-medium 72.1M (d=384, 13 attn layers, 24 experts
+top-4, 45.6M active/token), bpe8k, ctx 2048, `mix-gen3-chat`, 145k
+steps × b5 ≈ 1.485B tokens (20.6 tok/param). L4 Spot at launch
+(2026-08-11 00:10 UTC); converted Spot→on-demand IN PLACE at step
+~37k after 12 preemptions in 38h (set-scheduling --no-preemptible
+--provisioning-model=STANDARD --clear-instance-termination-action;
+~10 min downtime, zero steps lost). 4.0–4.1k tok/s throughout. SFT
+20k × b5, tail 1.5k, GRPO 600.
+
+**Results.**
+- **enwik8 test bpb 1.096** (best.pt @126.5k) vs gen-2's 1.247 —
+  **−12.1%**, the only cross-gen-comparable number. Sampled val 1.19
+  at 145k end.
+- Domains: dialogue 1.55→1.37, fineweb 1.56→1.25, enwik8 →1.17 —
+  and **war_and_peace floor 1.190 @52k → 1.532 @145k (+0.34)**, the
+  climb ACCELERATING through LR decay. Annealing amplifies eviction:
+  the mixture-optimal point actively trades a 2%-share domain away.
+  SFT miniature: dolly rose 1.02→1.14 then recovered to ~1.07
+  (register overlap saved it; Tolstoy had no such luck).
+- SFT: assistant-byte val 0.784; identity source bpb floored at 0.06
+  by step 14k. GRPO uniform eval: **arith 0.25 (gen-2: 0.00), count
+  1.00 (0.75), recall 1.00 (new), copy/parity/words 1.00 held**;
+  late dead_frac ~0.8 = all-correct saturation.
+- Forgetting evals: enwik8 test 1.096 → 1.839 after chat-only SFT
+  (+0.74), → 1.842 after GRPO (+0.003 — GRPO is essentially free).
+- Serve test (local serve.py + web UI, MPS): pool-name identity
+  perfect and consistent; **"You are Melise" → "Leo"** (novel name,
+  fails 3/3; name drifts per reply: Leo→Ivan). Date honesty
+  excellent ("no clock or calendar"). Basic facts ~0 ("Name an
+  animal" → "An animal"). Sonnet 18 NOT memorized even by the base
+  model given a 2-line verbatim key — pastiche in meter instead.
+- **Probe suite built** (transformer/probes.py, configs/facts.json
+  61 entries, scripts/probe_checkpoint.py; 12/12 tests). First
+  cross-stage run (--quick): identity/novel **0.67 pretrain → 0.00
+  rlvr** — pretrain HAS context-copying of unseen names and the
+  24-name SFT corpus TRAINED IT AWAY. facts/instances cloze 0.67 →
+  chat 0.00 (content exists weakly; on-demand access doesn't).
+  Verbatim trained-vs-heldout gap ≈ 0 at both stages.
+- Incidents: (1) after pretrain finished, stage_done() saw gen-2's
+  sft/rlvr dirs as newest-per-stage and SKIPPED all gen-3
+  post-training; DONE_CMD's scheduler-pause failed silently
+  (ACCESS_TOKEN_SCOPE_INSUFFICIENT — VM scopes lack cloudscheduler)
+  while its shutdown worked → 15h boot→evals→shutdown loop against
+  the enabled restarter (~$9). Recovery: pause restarter
+  laptop-side, `--post-only` relaunch (forces fresh chain — no
+  deletions needed, gen-2 artifacts untouched). (2) evals.jsonl
+  never syncs (BucketSync's last kick precedes the eval append) —
+  retrieved manually through an L4-stockout window. (3) best.pt
+  (val_loss draw noise) stale from 22.25k to 66k while SFT inits
+  from it — self-resolved in the decay, but a run ending earlier
+  would have fine-tuned a 15%-trained base. (4) Two zone-wide L4
+  stockouts (one at the provisioning switch, one post-run). (5) The
+  repo move broke .venv shebangs (fixed by sed).
+- Wall-clock: launch→PIPELINE_DONE 6.25 days (incl. preemption era +
+  16h incident); on-demand portion ran 4.5 days without a single
+  interruption.
+
+**Learnings.**
+1. **Small-share domains don't plateau under pressure — they get
+   evicted, and LR decay makes it worse.** The single best
+   instrumentation decision of the run was giving one book a val
+   slice; gen-4 groups corpora and instruments the group.
+2. **72M stores form, not content.** Register everywhere (play vs
+   Victorian novel competing for the same prompt), zero verbatim
+   retention (heldout gap ≈ 0 despite ~28 effective epochs/book),
+   zero basic facts. The gen-4 capacity bet (3× routed storage)
+   now has a precise success metric: probe/facts/*/heldout off the
+   floor.
+3. **SFT narrows more than it teaches**: +0.74 bpb general-text
+   forgetting AND destruction of pretrain's novel-name induction.
+   Fixes queued: 2–5% pretrain replay in SFT batches; identity
+   corpus v2 (hundreds of names — preservation, not enforcement);
+   context_recall RLVR family (retrieve name/date when given,
+   refuse honestly when not).
+4. **bpb alone diagnoses slowly.** The eviction took days to
+   understand; accuracy/entropy triples + behavior probes at every
+   eval make the same stories legible in realtime. The whole probe
+   suite costs ~2–3% overhead.
+5. Ops: stage_done needs a recency guard (stale dirs from ANY
+   earlier era are landmines); VM-side DONE_CMD can never pause the
+   scheduler (scopes) — leave the restarter paused on-demand;
+   offline evals must push their own results; keeper checkpoints
+   every ~25k (pruning destroyed the floor-era checkpoint the
+   eviction anatomy needed); pre-launch toy dirs joined gen-2 dirs
+   as resume hazards.
+6. On-demand was the right call: the Spot discount is thin for L4
+   now, and the uninterrupted tail ran exactly as scheduled.
+
+**Next steps.** Gen-4 proposal v1 frozen-in-draft
+(`gen4-ideas.md`): d=512 + 40 experts (163.2M/78.3M active), ~2.2B
+tokens (~13d on-demand, probe memory first), grouped corpora (books
+merged at 15%, fineweb → ~2GB with seeded row-group shuffle across
+shards — gen-3's slice was 3 crawl dumps, nothing post-Jan-2020),
+probe suite completion per `gen4-eval-suite.md`. Gen-3 ritual
+remaining: identity-tail rerun decision (Melise name fix, ~1.5h
+GPU), run-doc Results fill, memory updates, formal chat battery vs
+gen-2, meliseai.com swap (rlvr best.pt + bpe8k tokenizer in image +
+preamble). Deferred still deferred: bpe16k, DPO.
