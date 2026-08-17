@@ -28,7 +28,10 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
     && pip install --no-cache-dir fastapi "uvicorn[standard]" tokenizers
 
 COPY transformer/ transformer/
-COPY configs/tokenizer-bpe4k.json configs/tokenizer-bpe4k.json
+# Every trained tokenizer ships: checkpoints self-describe which one
+# they need (gen-2 = bpe4k, gen-3+ = bpe8k; a missing artifact crashes
+# model load at startup).
+COPY configs/tokenizer-*.json configs/
 COPY scripts/serve.py scripts/serve.py
 COPY serve_models/ checkpoints/
 

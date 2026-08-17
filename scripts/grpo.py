@@ -124,6 +124,10 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--log-every", type=int, default=1)
     g.add_argument("--eval-every", type=int, default=20)
     g.add_argument("--eval-prompts", type=int, default=20)
+    g.add_argument("--probe-every", type=int, default=0,
+                   help="Run the behavior probe suite (transformer.probes, "
+                   "chat forms) every N steps — probe/* into TB and "
+                   "metrics.jsonl. 0 disables")
     g.add_argument("--save-every", type=int, default=25)
     g.add_argument("--keep-last", type=int, default=3)
     g.add_argument("--run-name", type=str, default=None)
@@ -245,6 +249,14 @@ def main() -> None:
     sync = BucketSync(out_dir, enabled=not args.no_bucket_sync, stage="rlvr")
     print(f"bucket sync: {sync.dest or 'off'}\n")
 
+    probe_runner, probe_round = None, 0
+    if args.probe_every > 0:
+        from transformer.probes import ProbeRunner
+        probe_runner = ProbeRunner(model, tok, device, chat=True,
+                                   seed=args.seed, preamble=DEFAULT_PREAMBLE,
+                                   facts_per_family=8)
+        print(f"probes: chat forms every {args.probe_every} steps")
+
     emit(metrics_f, event="start", step=start_step, kind="rlvr-grpo", preset=preset,
          n_params=model.num_parameters(), total_steps=args.steps,
          tasks=task_names, group_size=args.group_size,
@@ -283,8 +295,10 @@ def main() -> None:
             # indexed (pi·G + gi) to match the advantage flatten order.
             G = args.group_size
             # Rollouts carry the deployed preamble so RL optimizes the
-            # same distribution serving uses.
-            prompts = [make_prompt_ids(t.prompt, tok, preamble=DEFAULT_PREAMBLE)
+            # same distribution serving uses — unless the task supplies
+            # its own (context_recall randomizes name/date fields there).
+            prompts = [make_prompt_ids(t.prompt, tok,
+                                       preamble=t.preamble or DEFAULT_PREAMBLE)
                        for t in tasks]
             seqs = [None] * (len(tasks) * G)
             rewards_pg = torch.zeros(len(tasks), G)
@@ -404,6 +418,25 @@ def main() -> None:
                     writer.add_scalar("eval/reward", mean_r, step)
                     writer.flush()
                 sync.kick()
+
+            if probe_runner is not None and step % args.probe_every == 0:
+                t_probe = time.perf_counter()
+                scalars = probe_runner.run()
+                dumps = probe_runner.probe_dumps(rotation=probe_round, k=2)
+                probe_round += 1
+                dt = time.perf_counter() - t_probe
+                print(f"      probes: {len(scalars)} scalars in {dt:.0f}s")
+                emit(metrics_f, event="probe", step=step, scalars=scalars,
+                     elapsed_s=dt)
+                for d in dumps:
+                    emit(metrics_f, event="probe_dump", step=step, **d)
+                if writer is not None:
+                    for k, v in scalars.items():
+                        writer.add_scalar(k, v, step)
+                    for d in dumps:
+                        writer.add_text(
+                            f"probe_dump/{d['id']}",
+                            f"**{d['prompt']}**\n\n```\n{d['text']}\n```", step)
 
             if step % args.save_every == 0:
                 ckpt_path = out_dir / f"step_{step}.pt"

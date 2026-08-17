@@ -145,13 +145,30 @@ def fmt_eta(seconds: float) -> str:
 def lr_at(step: int, args) -> float:
     """Learning rate for a (1-indexed) step. Pure function of step, so a
     resumed run lands on exactly the same schedule. Reads args.lr,
-    args.lr_schedule, args.warmup_frac, args.min_lr_frac, args.steps."""
+    args.lr_schedule, args.warmup_frac, args.min_lr_frac, args.steps —
+    and args.decay_frac for wsd.
+
+    wsd (warmup–stable–decay): linear warmup, hold at peak, then linear
+    decay over the FINAL decay_frac of --steps to min_lr_frac × lr.
+    Chosen for gen-4's ~13-day run: while in the stable phase, extending
+    --steps on resume just extends the hold (no schedule surgery, unlike
+    cosine where --steps reshapes every remaining step), and the decay
+    point is an explicit choice — gen-3 measured that annealing
+    amplifies small-domain eviction, so when to pay that cost should be
+    a decision, not a side effect."""
     if args.lr_schedule == "constant":
         return args.lr
     warmup = max(int(args.warmup_frac * args.steps), 1)
     min_lr = args.min_lr_frac * args.lr
     if step <= warmup:
         return args.lr * step / warmup
+    if args.lr_schedule == "wsd":
+        decay = max(int(getattr(args, "decay_frac", 0.15) * args.steps), 1)
+        decay_start = args.steps - decay
+        if step <= decay_start:
+            return args.lr
+        t = min((step - decay_start) / decay, 1.0)
+        return args.lr + (min_lr - args.lr) * t
     t = min((step - warmup) / max(args.steps - warmup, 1), 1.0)
     return min_lr + 0.5 * (args.lr - min_lr) * (1.0 + math.cos(math.pi * t))
 
@@ -190,7 +207,7 @@ def restore_rng_state(state: dict | None, device: torch.device) -> bool:
 
 def save_checkpoint(path, model, optimizer, step, cfg, *, preset, best_val,
                     best_step, tokens_seen, device, run_name=None,
-                    identity=None, stage=None, lineage=None):
+                    identity=None, stage=None, lineage=None, extra=None):
     """Atomic write: serialize to a tmp file in the same directory, then
     rename over the target. A Ctrl-C mid-save can never leave a truncated
     checkpoint at `path`.
@@ -199,7 +216,9 @@ def save_checkpoint(path, model, optimizer, step, cfg, *, preset, best_val,
     have to parse file names: `identity` is the stable lineage core
     ('kimi3-small-17M-scarlet-harbor'), `run_name`/`stage` identify the
     run that wrote this checkpoint, and `lineage` lists run names from
-    the pretrain root down to this run."""
+    the pretrain root down to this run. `extra` merges additional
+    stage-specific state into the payload (e.g. pretrain's trailing
+    val_bpb window for best-tracking resume)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "model": model.state_dict(),
@@ -217,6 +236,8 @@ def save_checkpoint(path, model, optimizer, step, cfg, *, preset, best_val,
         "rng": rng_state(device),
         "torch_version": torch.__version__,
     }
+    if extra:
+        payload.update(extra)
     tmp = path.with_name(path.name + ".tmp")
     torch.save(payload, tmp)
     tmp.replace(path)
@@ -230,11 +251,17 @@ def update_symlink(out_dir, name, target):
     link.symlink_to(target.name)
 
 
-def prune_old_checkpoints(out_dir, keep_last):
+def prune_old_checkpoints(out_dir, keep_last, keep_every: int = 0):
     """Delete all but the most recent `keep_last` step_*.pt files.
 
     `best.pt` is a regular file (not a symlink to a step_*.pt), so pruning
     step files doesn't risk deleting it.
+
+    keep_every > 0 exempts milestone checkpoints (step % keep_every == 0)
+    from pruning entirely — gen-3's pruning destroyed the floor-era
+    (~52k) checkpoint the eviction post-mortem needed; a few GB of
+    keepers in the bucket buys post-hoc science (BucketSync mirrors
+    deletions, so exemption here is what preserves them there too).
     """
     if keep_last <= 0:
         return []
@@ -242,6 +269,8 @@ def prune_old_checkpoints(out_dir, keep_last):
         out_dir.glob("step_*.pt"),
         key=lambda p: int(p.stem.split("_")[1]),
     )
+    if keep_every > 0:
+        ckpts = [p for p in ckpts if int(p.stem.split("_")[1]) % keep_every]
     if len(ckpts) <= keep_last:
         return []
     to_delete = ckpts[:-keep_last]
@@ -250,14 +279,32 @@ def prune_old_checkpoints(out_dir, keep_last):
     return to_delete
 
 
-def recover_best_from_metrics(metrics_path):
-    """Scan an existing metrics.jsonl for the best val seen so far.
+# Trailing-window width for best.pt selection. Gen-3's best.pt tracked
+# single-eval sampled val_loss, whose ±0.04 bpb draw noise let one lucky
+# draw at step 22,250 hold "best" for 53k steps while pipeline.sh stood
+# ready to init SFT from it. Gen-4 evals are deterministic
+# (fixed_window_eval), and best is the min TRAILING-3 mean of val_bpb —
+# no single eval can hold the title.
+BEST_WINDOW = 3
+
+
+def windowed_best_val(history: list, window: int = BEST_WINDOW) -> float:
+    """Mean of the trailing `window` entries (all of them if fewer)."""
+    tail = history[-window:]
+    return sum(tail) / len(tail)
+
+
+def recover_best_from_metrics(metrics_path, window: int = BEST_WINDOW):
+    """Scan an existing metrics.jsonl for the best val seen so far —
+    min trailing-`window` mean of val_bpb (matching the live tracking),
+    falling back to single-eval val_loss for runs that predate val_bpb.
 
     Fallback for resuming checkpoints from before best_val was stored in
     the checkpoint itself. Returns (best_val, best_step) or (inf, None).
     """
-    best_val = float("inf")
-    best_step = None
+    best_val, best_step = float("inf"), None
+    loss_best, loss_step = float("inf"), None
+    hist: list[float] = []
     if not metrics_path.exists():
         return best_val, best_step
     with open(metrics_path) as f:
@@ -266,11 +313,19 @@ def recover_best_from_metrics(metrics_path):
                 ev = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if ev.get("event") == "eval":
-                v = ev.get("val_loss")
-                if v is not None and v < best_val:
-                    best_val = v
-                    best_step = ev.get("step")
+            if ev.get("event") != "eval":
+                continue
+            b = ev.get("val_bpb")
+            if b is not None:
+                hist.append(b)
+                m = windowed_best_val(hist, window)
+                if m < best_val:
+                    best_val, best_step = m, ev.get("step")
+            v = ev.get("val_loss")
+            if v is not None and v < loss_best:
+                loss_best, loss_step = v, ev.get("step")
+    if best_step is None:  # pre-val_bpb run — old semantics
+        return loss_best, loss_step
     return best_val, best_step
 
 
@@ -341,6 +396,28 @@ class BucketSync:
         if self.proc is not None:
             self.proc.wait()
         subprocess.run(self._cmd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def push_run_file(path: Path) -> bool:
+    """Blocking upload of one file in a checkpoints/<stage>/<run>/ dir to
+    its bucket mirror. For artifacts written AFTER a stage's final
+    BucketSync kick — offline evals.jsonl / probes.jsonl never synced in
+    gen-3 (the last kick fires at the final training save, before the
+    eval stage appends; retrieved manually through a stockout window).
+    Returns False (silently) when GCS isn't configured — laptop runs."""
+    gcs_config = PROJECT_ROOT / "configs" / "gcs.json"
+    if not gcs_config.exists() or not shutil.which("gcloud"):
+        return False
+    path = path.resolve()
+    run_dir = path.parent
+    stage = run_dir.parent.name
+    if stage not in ("pretrain", "sft", "rlvr"):
+        return False
+    bucket = json.loads(gcs_config.read_text())["bucket"]
+    dest = f"gs://{bucket}/runs/{stage}/{run_dir.name}/{path.name}"
+    r = subprocess.run(["gcloud", "storage", "cp", str(path), dest],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return r.returncode == 0
 
 
 # ---------- Model instrumentation ----------

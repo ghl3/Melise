@@ -103,7 +103,8 @@ def eval_rewards(model, task_names, n_prompts: int, seed, max_new: int, device,
         for task in tasks:
             comps, _, _ = rollout_group(
                 model,
-                make_prompt_ids(task.prompt, tok, preamble=DEFAULT_PREAMBLE),
+                make_prompt_ids(task.prompt, tok,
+                                preamble=task.preamble or DEFAULT_PREAMBLE),
                 1, max_new, 1.0,
                 device, greedy=True, stop_id=tok.end_turn_id,
             )

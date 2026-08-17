@@ -230,6 +230,31 @@ def test_kimi3_layer_layout():
     assert all(m.d_rope == 0 and m.gate_proj is not None for m in mlas)
 
 
+def test_medium_wide_preset():
+    """The gen-4 preset must match the frozen proposal numbers: 163.2M
+    total / 94.4M routed pool / 78.3M active per token at vocab 8192
+    (docs/runs/gen4-ideas.md, Proposal v1 — counted, not estimated)."""
+    from transformer.ffn import StableLatentMoE
+    from transformer.models import MODELS
+    from transformer.models.kimi3 import Kimi3LM, kimi3_medium_wide
+
+    assert "kimi3-medium-wide" in MODELS
+    cfg = kimi3_medium_wide(vocab_size=8192, dtype=torch.float32)
+    assert (cfg.d_model, cfg.n_blocks, cfg.n_experts, cfg.top_k) == (512, 3, 40, 4)
+    assert cfg.n_layers == 13
+    model = Kimi3LM(cfg)
+    total = model.num_parameters()
+    routed = sum(
+        p.numel()
+        for mod in model.modules() if isinstance(mod, StableLatentMoE)
+        for p in mod.experts.parameters()
+    )
+    active = total - routed + routed * cfg.top_k / cfg.n_experts
+    assert abs(total / 1e6 - 163.2) < 0.15, total
+    assert abs(routed / 1e6 - 94.4) < 0.15, routed
+    assert abs(active / 1e6 - 78.3) < 0.15, active
+
+
 def test_data_mix_groups():
     """Group shares compile to per-file multipliers: within-group files
     sample by byte size (uniform epochs), group share is exact, and the
@@ -254,7 +279,7 @@ def test_data_mix_groups():
 
         # Two grouped files at share 0.4, one ungrouped at multiplier 0.5:
         # fixed = 600*0.5 = 300 → total = 300/(1-0.4) = 500 → m_g = 0.4*500/400.
-        paths, mults, _ = load({
+        paths, mults, _, groups = load({
             "include": f"{rel}/[abc].txt",
             "groups": {"g": {"include": [f"{rel}/a.txt", f"{rel}/b.txt"],
                              "share": 0.4}},
@@ -265,9 +290,11 @@ def test_data_mix_groups():
         total = sum(weights)
         assert abs((weights[0] + weights[1]) / total - 0.4) < 1e-9
         assert abs(mults[0] - mults[1]) < 1e-12  # same multiplier within group
+        # Membership map: grouped files labeled, ungrouped absent.
+        assert {p.name: g for p, g in groups.items()} == {"a.txt": "g", "b.txt": "g"}
 
         # All files grouped: shares are the relative weights directly.
-        paths, mults, _ = load({
+        paths, mults, _, groups = load({
             "include": f"{rel}/[abc].txt",
             "groups": {
                 "g1": {"include": [f"{rel}/a.txt", f"{rel}/b.txt"], "share": 0.7},
@@ -299,6 +326,87 @@ def test_data_mix_groups():
         shutil.rmtree(tmp)
 
 
+def test_fixed_window_eval():
+    """Pinned windows: identical results across calls (zero draw noise),
+    sane metric ranges, byte-weighted aggregation, stable window starts
+    across processes (seeded by file stem)."""
+    from transformer.eval import EVAL_METRICS, fixed_window_eval, pin_val_windows
+    from transformer.models.kimi3 import Kimi3LM
+
+    torch.manual_seed(0)
+    model = Kimi3LM(TINY["kimi3"]).eval()
+    seq_len = 24
+    val_data = [torch.randint(0, 256, (2000,)), torch.randint(0, 256, (600,))]
+    val_paths = [Path("data/aaa.txt"), Path("data/bbb.txt")]
+
+    pinned = pin_val_windows(val_data, val_paths, seq_len, 4, seed=0)
+    assert pinned == pin_val_windows(val_data, val_paths, seq_len, 4, seed=0)
+    assert all(len(p) == 4 for p in pinned)
+    assert pin_val_windows(val_data, val_paths, seq_len, 4, seed=1) != pinned
+
+    agg1, dom1 = fixed_window_eval(model, val_data, val_paths, pinned,
+                                   seq_len, 2, agg_weights=[2000.0, 600.0])
+    agg2, dom2 = fixed_window_eval(model, val_data, val_paths, pinned,
+                                   seq_len, 2, agg_weights=[2000.0, 600.0])
+    assert agg1 == agg2 and dom1 == dom2          # deterministic
+    assert set(dom1) == {"aaa", "bbb"}
+    for d in dom1.values():
+        assert set(d) == set(EVAL_METRICS)
+        assert 0.0 <= d["acc"] <= d["top5"] <= 1.0
+        assert d["loss"] > 0 and d["ent"] > 0
+    # Aggregate is the byte-weighted mean of the domain values.
+    expect = (dom1["aaa"]["bpb"] * 2000 + dom1["bbb"]["bpb"] * 600) / 2600
+    assert abs(agg1["bpb"] - expect) < 1e-9
+    # A too-short slice yields no windows and is skipped, not crashed.
+    pinned3 = pin_val_windows([val_data[0], torch.randint(0, 256, (10,))],
+                              val_paths, seq_len, 4)
+    assert pinned3[1] == []
+    _, dom3 = fixed_window_eval(model, [val_data[0], torch.randint(0, 256, (10,))],
+                                val_paths, pinned3, seq_len, 2)
+    assert set(dom3) == {"aaa"}
+
+
+def test_wsd_schedule_and_windowed_best():
+    """WSD: warmup → flat hold → linear decay over the final decay_frac;
+    extending --steps mid-hold leaves the current LR untouched. Windowed
+    best: no single eval can take the title."""
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from types import SimpleNamespace
+
+    from run_utils import lr_at, prune_old_checkpoints, windowed_best_val
+
+    args = SimpleNamespace(lr=1e-3, lr_schedule="wsd", warmup_frac=0.01,
+                           min_lr_frac=0.1, decay_frac=0.2, steps=1000)
+    assert lr_at(5, args) < 1e-3                       # warming up
+    assert lr_at(100, args) == lr_at(700, args) == 1e-3  # hold at peak
+    assert lr_at(900, args) == 1e-3 + (1e-4 - 1e-3) * 0.5  # mid-decay
+    assert abs(lr_at(1000, args) - 1e-4) < 1e-12       # floor at min_lr
+    # Extending the run while in the hold does not change today's LR.
+    longer = SimpleNamespace(**{**vars(args), "steps": 2000})
+    assert lr_at(700, longer) == 1e-3
+    # Cosine (unchanged behavior) still reshapes on extension.
+    cos = SimpleNamespace(**{**vars(args), "lr_schedule": "cosine"})
+    assert lr_at(700, cos) != lr_at(700, SimpleNamespace(
+        **{**vars(cos), "steps": 2000}))
+
+    assert windowed_best_val([1.0]) == 1.0
+    assert windowed_best_val([3.0, 2.0, 1.0, 100.0]) == (2.0 + 1.0 + 100.0) / 3
+
+    # Keeper checkpoints survive pruning.
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        for s in (1000, 2000, 25000, 26000, 27000, 50000, 51000):
+            (d / f"step_{s}.pt").write_bytes(b"x")
+        deleted = prune_old_checkpoints(d, keep_last=2, keep_every=25000)
+        kept = sorted(p.name for p in d.glob("step_*.pt"))
+        assert "step_25000.pt" in kept and "step_50000.pt" in kept
+        assert kept == ["step_25000.pt", "step_27000.pt", "step_50000.pt",
+                        "step_51000.pt"], kept
+        assert all(int(p.stem.split("_")[1]) % 25000 for p in deleted)
+
+
 def test_probes_scoring():
     """Probe scorers and the facts table: deterministic split, schema,
     word-boundary matching, echo exclusion."""
@@ -328,6 +436,22 @@ def test_probes_scoring():
     assert not set(HELDOUT_NAMES) & set(_NAMES)
     nn = novel_names(7)
     assert nn == novel_names(7) and not set(nn) & set(_NAMES)
+
+    # Forced-choice entries: naming both options scores nothing (the
+    # reject list closes the echo-the-question slack).
+    by_id = {f["id"]: f for f in facts}
+    sun = by_id["attr-sun"]
+    assert contains_any("hot", sun["answers"])
+    assert contains_any("hot or cold", sun["reject"])
+
+    # The identity-module contract: training pool disjoint from both
+    # eval strata, Melise present, legacy pool preserved.
+    from transformer.identity import (HELDOUT_NAMES as IH, NOVEL_SPACE,
+                                      TRAIN_NAMES)
+    assert not set(TRAIN_NAMES) & set(IH)
+    assert not set(TRAIN_NAMES) & NOVEL_SPACE
+    assert "Melise" in TRAIN_NAMES and set(_NAMES) <= set(TRAIN_NAMES)
+    assert len(TRAIN_NAMES) >= 300
 
 
 def main() -> int:

@@ -303,45 +303,51 @@ high-water mark; toy-pipeline validation mandatory as always.
   viable at d=512 (d/V 6.3→3.1%… still fine; embed+head ~10%) but
   stays deferred — gen-5 with the width already banked.
 
-**Open at freeze:**
-- [ ] **LR schedule: cosine vs WSD.** WSD (hold + brancheable decay)
-      fits a 13-day time-sensitive run: decay-and-ship whenever the
-      curve says so, extend without surgery. Touches resume logic +
-      best.pt semantics — decide explicitly.
+**Open at freeze** (BUILD DONE 2026-08-17 — recipe frozen-in-draft in
+`gen4-medium-wide.md`; only the VM hardware probe remains):
+- [x] **LR schedule: WSD** (user call 2026-08-17). Implemented in
+      run_utils.lr_at (`--lr-schedule wsd --decay-frac 0.15`, tested):
+      extend-mid-hold needs no surgery; the decay's eviction cost is
+      paid at a chosen time, not as a side effect.
 - [ ] **Throughput/memory probe** of the exact config on the VM
-      (~1h, between gens): real tok/s + peak GiB + batch → then
-      freeze token budget. ±10% throughput = ±1.3 days.
-- [ ] **Probe suite** (full spec + status: `gen4-eval-suite.md`).
-      Core is BUILT (transformer/probes.py, configs/facts.json,
-      scripts/probe_checkpoint.py, tests) and already produced the
-      run's sharpest post-hoc finding: pretrain HAS novel-name
-      induction (0.67) and SFT DESTROYS it (0.00) — the 24-name
-      identity corpus teaches answer-from-pool over copy-from-context.
-      Remaining before launch: wire probes into the three training
-      loops (TB `probe/*` + metrics.jsonl), grow facts.json toward
-      300+, gen_fact_sft (train split only), identity corpus v2
-      (hundreds of names incl. novel strings + dated preambles +
-      ask-twice consistency — capability PRESERVATION, not just
-      enforcement), `context_recall` RLVR task family, serve.py
-      dynamic date in preamble.
-- [ ] Eval fixes land BEFORE launch (nothing changes mid-run):
-      best.pt by windowed val_bpb; fixed-window per-domain evals;
-      multi-prompt sample battery (one per register, greedy+temp);
-      val slices on 2–3 more books; **per-domain accuracy metrics** —
-      val_domain_acc/* (top-1), val_domain_top5/*, val_domain_ent/*
-      (predictive entropy), same per-source in SFT. Free at eval time
-      (logits already in hand) and decomposes bpb moves in realtime:
-      bpb↑+acc-flat+ent↓ = confidence misallocation (the gen-3
-      war_and_peace mystery, diagnosable live); bpb↑+acc↓ = rank
-      loss. NB per-token, not byte-true — within-run diagnostic only,
-      not cross-tokenizer comparable.
-- [ ] Mix weights + small-domain policy (accept eviction / floors /
-      late replay) — informed by gen-3's final forgetting evals.
-- [ ] Identity: bake Melise as dominant preamble name? (after gen-3
-      identity evals)
-- [ ] SFT/GRPO budgets at the new scale (keep 20k/600? decide with
-      gen-3 post-training results in hand)
-- [ ] Serving latency check at swap: active ×1.72 on Cloud Run CPU.
+      (~1h, between gens): real tok/s + peak GiB + b4-vs-b5 → then
+      freeze PT_STEPS (2.2B budget decided; corpus tensors now int16,
+      ~2 GB freed on-device). Also: time one CUDA probe round (≤3%
+      overhead budget) and a toy GRPO step at the new size.
+- [x] **Probe suite** — COMPLETE and wired into all three loops
+      (`--probe-every`; TB `probe/*` + metrics probe/probe_dump
+      events; rotating dumps, greedy+t0.8). facts.json 58→298 with
+      reject-lists (forced-choice echo slack closed); gen_fact_sft.py
+      (train split, self-checked); identity corpus v2
+      (transformer/identity.py: ~370-name pool with import-time
+      asserts keeping heldout/novel strata disjoint; dated preambles;
+      ask-twice); `context_recall` + `facts` RLVR families with
+      per-task preamble plumbing through rollouts and eval;
+      serve.py `{date}` preamble rendering; task_formats + chat
+      verbatim probes.
+- [x] Eval fixes landed: best.pt by trailing-3 windowed val_bpb
+      (resume-safe; recover_best_from_metrics matches); deterministic
+      fixed-window per-domain evals (pin_val_windows /
+      fixed_window_eval); val_domain_acc/top5/ent + byte-weighted
+      val_group/*; keeper checkpoints (--keep-every 25000);
+      rebuild_tb.py + recover_metrics.py replay every new event type
+      (and two PRE-EXISTING parser gaps got fixed along the way:
+      `ent=` in pretrain step lines and `dead=/ent=` in grpo lines
+      had silently broken log recovery since gen-3).
+- [x] Mix updated: dialogue → 7% with PersonaChat + BlendedSkillTalk
+      (+15 MB, `dialogue_persona` val canary added); fineweb 44%.
+      Byte counts re-freeze when the 2GB fineweb lands. Small-domain
+      policy: no floors — eviction accepted but now visible live
+      (groups + acc/ent decomposition + keepers for post-hoc).
+- [x] Identity: Melise IN the pool, NOT dominant (~8% of identity
+      preambles) — preservation over enforcement, per the probe
+      finding. chat.DEFAULT_PREAMBLE renamed Lily → Melise.
+- [x] SFT/GRPO budgets (user call): SFT 20k × b4 with 3% pretrain
+      replay (`--replay-frac`), tail 1.5k with chat_facts added,
+      GRPO 600 with the two new families in the weighted rotation.
+- [x] Serving latency, first data point: gen-3 (45.6M active) on
+      Cloud Run 2 vCPU ≈ 4.5 tok/s. Gen-4 (78.3M) projects ~2.5–3 —
+      decide --cpu 4 / bf16-at-load / accept at swap time.
 
 **Inter-generation work queue** (keeps GPU idle time ~zero): gen-3
 post-run ritual (results/NOTEBOOK/memories/chat battery/model swap +
@@ -370,25 +376,28 @@ scheduler-pause half FAILS SILENTLY (VM scopes lack cloudscheduler)
 but the shutdown half works → boot→evals→self-shutdown→restarter
 loop, ~15h (~$9). Recovery: pause restarter (done, from laptop),
 delete toy dirs local+bucket, relaunch `--post-only` with full env.
-Gen-4 fixes:
+Gen-4 fixes (ALL LANDED 2026-08-17 except the manual checklist item):
 - [ ] Pre-launch checklist: DELETE toy/validation run dirs for all
-      stages before the real launch.
-- [ ] pipeline.sh guard: a stage counts as done only if its run dir
-      postdates the upstream stage's end (staleness check).
-- [ ] DONE_CMD: pause-from-VM can never work with current scopes —
-      drop it (leave restarter paused on-demand; automaticRestart
-      covers host errors) or move the pause laptop-side.
-- [ ] evals.jsonl never syncs: BucketSync's last kick fires at the
-      final training save, BEFORE offline evals append. Fix: have
-      the eval stage (or eval_checkpoint.py itself) push evals.jsonl
-      to the run's bucket mirror after writing. (Retrieved manually
-      2026-08-17 through a stockout window.)
-- [ ] SFT forgetting is large: enwik8 test bpb 1.096 (pretrain best)
-      → 1.84 after chat-only SFT (+0.74; GRPO adds ~nothing).
-      Expected direction, notable size. Gen-4 option: replay a small
-      pretrain-mix fraction (2–5%) inside SFT batches to anchor the
-      base distribution — cheap, standard, measurable via the same
-      eval.
+      stages before the real launch (manual — chain_ok would refuse
+      them anyway, but belt AND suspenders; in gen4-medium-wide.md's
+      gates).
+- [x] pipeline.sh guard — implemented STRONGER than the staleness
+      idea: `chain_ok` requires a downstream dir's run.json lineage
+      to name the current upstream run. Kills both incident classes
+      (other-generation dirs AND toy dirs) with no timestamp
+      fragility. Toy validation must plant a stale dir and watch it
+      refused.
+- [x] DONE_CMD: scheduler-pause half dropped — shutdown-only
+      (`DONE_CMD="sudo shutdown -h +2"`); restarter stays paused
+      laptop-side on-demand. OPERATIONS.md updated.
+- [x] evals.jsonl self-push: eval_checkpoint.py uploads to the run's
+      bucket mirror after appending (run_utils.push_run_file);
+      probe_checkpoint.py pushes probes.jsonl the same way.
+- [x] SFT replay: sft.py `--replay-frac 0.03 --replay-mix <mix>` —
+      raw pretrain-mix LM batches interleaved every ~33rd step,
+      corpora resident on CPU (zero GPU cost), train/replay_bpb
+      logged. Measurable via the same forgetting eval + the raw-form
+      verbatim probes now running during SFT.
 
 ## Blocked on gen-3 completion — revisit each after
 

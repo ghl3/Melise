@@ -39,7 +39,13 @@ What gets tracked (metrics.jsonl and TensorBoard):
     train/lr                the scheduled learning rate
     train/grad_norm         pre-clip global gradient norm
     train/tok_per_sec, train/tokens_seen, train/mem_gb
-    val/loss, val/bpb, val/best
+    val/loss, val/bpb       deterministic fixed-window eval (pinned
+                            windows per domain — see transformer.eval)
+    val/best                best trailing-3 mean of val_bpb (drives best.pt)
+    val/acc, val/top5, val/ent      aggregate accuracy/top-5/entropy
+    val_domain/*            per-domain bpb; val_domain_{acc,top5,ent}/*
+    val_group/*             byte-weighted per-group bpb (mix "groups")
+    probe/*                 behavior probes (--probe-every; transformer.probes)
     params/global_norm      global L2 norm of all weights (on evals)
     moe/L*_max_load         per-MoE-layer max expert load fraction
     moe/L*_entropy          per-MoE-layer normalized routing entropy
@@ -74,10 +80,11 @@ import torch.nn.functional as F
 
 from transformer import MODELS, build_model, generate
 from transformer.data import get_batch, load_data, load_data_mix, parse_weights
-from transformer.eval import sampled_val_loss
+from transformer.eval import fixed_window_eval, pin_val_windows
 from transformer.tokenizer import load_tokenizer
 
 from run_utils import (
+    BEST_WINDOW,
     BucketSync,
     MoEMonitor,
     Tee,
@@ -94,6 +101,7 @@ from run_utils import (
     save_checkpoint,
     strip_run_identity,
     update_symlink,
+    windowed_best_val,
 )
 
 try:
@@ -147,11 +155,14 @@ def parse_args() -> argparse.Namespace:
         "--lr-schedule",
         type=str,
         default="cosine",
-        choices=("cosine", "constant"),
+        choices=("cosine", "constant", "wsd"),
         help="cosine: linear warmup then cosine decay to --min-lr-frac * lr "
         "(schedule is a pure function of step, so it resumes exactly; "
         "note it is shaped by --steps, so extending --steps on resume "
-        "reshapes the tail)",
+        "reshapes the tail). wsd: warmup, hold at peak, linear decay "
+        "over the final --decay-frac of --steps — extending --steps "
+        "while in the hold just extends the hold (gen-4 default; see "
+        "run_utils.lr_at)",
     )
     g.add_argument(
         "--warmup-frac",
@@ -165,6 +176,12 @@ def parse_args() -> argparse.Namespace:
         default=0.1,
         help="Final LR as a fraction of --lr (cosine schedule)",
     )
+    g.add_argument(
+        "--decay-frac",
+        type=float,
+        default=0.15,
+        help="wsd only: fraction of --steps spent in the final linear decay",
+    )
     g.add_argument("--weight-decay", type=float, default=0.1)
     g.add_argument("--grad-clip", type=float, default=1.0, help="Max gradient norm")
 
@@ -176,10 +193,21 @@ def parse_args() -> argparse.Namespace:
         "--eval-every", type=int, default=100, help="Run val eval every N steps"
     )
     g.add_argument(
-        "--eval-batches",
+        "--eval-windows",
         type=int,
         default=16,
-        help="Number of val batches averaged per eval",
+        help="Pinned windows scored per val domain at every eval "
+        "(deterministic — the same windows every time; see "
+        "transformer.eval.pin_val_windows)",
+    )
+    g.add_argument(
+        "--probe-every",
+        type=int,
+        default=0,
+        help="Run the behavior probe suite (transformer.probes, raw "
+        "continuation forms) every N steps: probe/* scalars + rotating "
+        "generation dumps into TB and metrics.jsonl. 0 disables. "
+        "Budget ~1 min of GPU per round — pick N ≈ 4× --eval-every",
     )
     g.add_argument(
         "--sample-every", type=int, default=100, help="Generate a sample every N steps"
@@ -226,6 +254,14 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=5,
         help="Keep only N most recent checkpoints (best.pt's target is protected)",
+    )
+    g.add_argument(
+        "--keep-every",
+        type=int,
+        default=0,
+        help="Exempt milestone checkpoints (step %% N == 0) from pruning — "
+        "sparse keepers for post-hoc analysis (gen-4 recipe: 25000). "
+        "0 disables",
     )
 
     g = p.add_argument_group("data")
@@ -399,23 +435,30 @@ def main() -> None:
     # moments, step counter, best-val tracking, token count, RNG streams.
     start_step = 0
     tokens_seen = 0
+    # best_val is the min TRAILING-BEST_WINDOW mean of val_bpb (see
+    # run_utils.BEST_WINDOW for why single-eval best was retired).
     best_val = float("inf")
     best_step = None
+    val_bpb_hist: list[float] = []
     if ckpt is not None:
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         start_step = int(ckpt["step"])
         tokens_seen = int(ckpt.get("tokens_seen", start_step * args.batch_size * args.seq_len))
-        if "best_val" in ckpt and ckpt["best_val"] is not None:
-            best_val, best_step = ckpt["best_val"], ckpt.get("best_step")
-        else:  # pre-refactor checkpoint — reconstruct from the event log
+        if "val_bpb_hist" in ckpt:  # windowed-bpb era checkpoint
+            val_bpb_hist = list(ckpt["val_bpb_hist"])
+            if ckpt.get("best_val") is not None:
+                best_val, best_step = ckpt["best_val"], ckpt.get("best_step")
+        else:  # older checkpoint (best_val was single-eval val_loss) —
+            # rebuild under the current windowed-val_bpb semantics
             best_val, best_step = recover_best_from_metrics(metrics_path)
         if restore_rng_state(ckpt.get("rng"), device):
             print(f"resumed at step {start_step} (RNG streams restored)")
         else:
             print(f"resumed at step {start_step}")
         if best_step is not None:
-            print(f"best so far: val_loss={best_val:.4f} at step {best_step}")
+            print(f"best so far: {best_val:.4f} at step {best_step} "
+                  f"(trailing-{BEST_WINDOW} val_bpb)")
         del ckpt  # free the 100s-of-MB state dict copy
 
     if start_step >= args.steps:
@@ -424,11 +467,13 @@ def main() -> None:
 
     mix_mults = None
     splits = None
+    mix_groups: dict = {}
     if args.data_mix is not None:
         if args.data or args.data_weights:
             raise SystemExit("--data-mix is mutually exclusive with --data/--data-weights")
-        args.data, mix_mults, splits = load_data_mix(args.data_mix)
-        print(f"data mix: {args.data_mix} ({len(args.data)} files)")
+        args.data, mix_mults, splits, mix_groups = load_data_mix(args.data_mix)
+        print(f"data mix: {args.data_mix} ({len(args.data)} files, "
+              f"{len(set(mix_groups.values()))} groups)")
     if not args.data:
         args.data = [PROJECT_ROOT / "data" / "tinyshakespeare.txt"]
     if splits is None:
@@ -442,10 +487,17 @@ def main() -> None:
     else:
         weights = parse_weights(args.data_weights, byte_counts)
     norm_weights = weights / weights.sum()
-    # Val batches are drawn from the val slices only, weighted by their size.
-    val_weights = torch.tensor([float(b) for b in val_bytes]) if val_bytes else None
-    if val_weights is None:
+    # Pinned eval windows: every eval scores the SAME seeded windows per
+    # val slice — deterministic curves, equal per-domain coverage, and a
+    # best.pt criterion no lucky draw can hold (gen-3 lessons 2+3).
+    val_windows = pin_val_windows(val_data, val_paths, args.seq_len,
+                                  args.eval_windows, seed=args.seed)
+    have_val = any(val_windows)
+    if not have_val:
         print("note: no file defines a val split — skipping evals and best.pt tracking")
+    # stem -> group name, for val_group/* aggregates.
+    val_groups = {Path(p).stem: mix_groups[p] for p in val_paths
+                  if p in mix_groups}
 
     print(f"datasets ({len(args.data)}):")
     for path, n_bytes, w in zip(args.data, byte_counts, norm_weights.tolist()):
@@ -532,7 +584,17 @@ def main() -> None:
             tokens_seen=tokens_seen, device=device,
             run_name=out_dir.name, identity=identity, stage="pretrain",
             lineage=lineage,
+            # Trailing val_bpb window so windowed-best tracking resumes
+            # exactly (see run_utils.BEST_WINDOW).
+            extra={"val_bpb_hist": val_bpb_hist[-BEST_WINDOW:]},
         )
+
+    probe_runner, probe_round = None, 0
+    if args.probe_every > 0:
+        from transformer.probes import ProbeRunner
+        probe_runner = ProbeRunner(model, tok, device, chat=False,
+                                   seed=args.seed, facts_per_family=8)
+        print(f"probes: raw-continuation forms every {args.probe_every} steps")
 
     model.train()
     t_start = time.perf_counter()
@@ -616,50 +678,66 @@ def main() -> None:
                     for name, span in monitor.bias_spans.items():
                         writer.add_scalar(f"moe/{name}_bias_span", span, step)
 
-            if step % args.eval_every == 0 and val_weights is not None:
-                val, val_bpb = sampled_val_loss(
-                    model,
-                    val_data,
-                    val_weights,
-                    args.batch_size,
-                    args.seq_len,
-                    args.eval_batches,
-                    byte_lens=byte_lens,
-                )
-                is_best = val < best_val
+            if step % args.eval_every == 0 and have_val:
+                # Deterministic fixed-window eval: bpb + accuracy/top-5/
+                # entropy per domain. The triple decomposes bpb moves
+                # live: bpb↑+acc-flat+ent↓ = confidence misallocation
+                # (gen-3's war_and_peace shape); bpb↑+acc↓ = rank loss.
+                agg, domains = fixed_window_eval(
+                    model, val_data, val_paths, val_windows, args.seq_len,
+                    args.batch_size, byte_lens=byte_lens,
+                    agg_weights=[float(b) for b in val_bytes])
+                val, val_bpb = agg["loss"], agg["bpb"]
+                val_bpb_hist.append(val_bpb)
+                windowed = windowed_best_val(val_bpb_hist)
+                is_best = windowed < best_val
                 if is_best:
-                    best_val = val
+                    best_val = windowed
                     best_step = step
                     # Save best.pt immediately at the eval that produced the
                     # new best — no eval-vs-save alignment gap.
                     full_save(out_dir / "best.pt", step)
                 pnorm = global_param_norm(model)
-                # Per-domain val: every file that defines a val slice gets
-                # its own number — on long runs this is how you see e.g.
-                # whether the dialogue register is actually being learned.
-                domain_bpb = {}
-                for path, vd in zip(val_paths, val_data):
-                    if len(vd) > args.seq_len:
-                        _, d_bpb = sampled_val_loss(
-                            model, [vd], torch.tensor([1.0]),
-                            args.batch_size, args.seq_len,
-                            max(2, args.eval_batches // 4),
-                            byte_lens=byte_lens)
-                        domain_bpb[Path(path).stem] = round(d_bpb, 4)
+                domain_bpb = {k: round(v["bpb"], 4) for k, v in domains.items()}
+                domain_acc = {k: round(v["acc"], 4) for k, v in domains.items()}
+                domain_top5 = {k: round(v["top5"], 4) for k, v in domains.items()}
+                domain_ent = {k: round(v["ent"], 4) for k, v in domains.items()}
+                # Byte-weighted group aggregates (val_group/*): one honest
+                # curve per corpus group instead of N noisy per-file ones.
+                gw: dict[str, float] = {}
+                gsum: dict[str, float] = {}
+                for p, b in zip(val_paths, val_bytes):
+                    stem = Path(p).stem
+                    g = val_groups.get(stem)
+                    if g is not None and stem in domains:
+                        gw[g] = gw.get(g, 0.0) + b
+                        gsum[g] = gsum.get(g, 0.0) + b * domains[stem]["bpb"]
+                group_bpb = {g: round(gsum[g] / gw[g], 4) for g in gw}
                 print(
-                    f"        val_loss={val:.4f}  val_bpb={val_bpb:.3f}"
+                    f"        val_loss={val:.4f}  val_bpb={val_bpb:.3f}  "
+                    f"acc={agg['acc']:.3f}  ent={agg['ent']:.2f}"
                     + ("  ← best" if is_best else "")
                     + ("  [" + "  ".join(f"{k}={v:.3f}"
                                          for k, v in domain_bpb.items()) + "]"
                        if len(domain_bpb) > 1 else "")
                 )
+                if group_bpb:
+                    print("        grp: " + "  ".join(
+                        f"{k}={v:.3f}" for k, v in sorted(group_bpb.items())))
                 emit(
                     metrics_f,
                     event="eval",
                     step=step,
                     val_loss=val,
                     val_bpb=val_bpb,
+                    val_acc=agg["acc"],
+                    val_top5=agg["top5"],
+                    val_ent=agg["ent"],
                     domain_bpb=domain_bpb,
+                    domain_acc=domain_acc,
+                    domain_top5=domain_top5,
+                    domain_ent=domain_ent,
+                    group_bpb=group_bpb or None,
                     tokens_seen=tokens_seen,
                     param_norm=pnorm,
                     is_best=is_best,
@@ -668,8 +746,19 @@ def main() -> None:
                     writer.add_scalar("val/loss", val, step)
                     writer.add_scalar("val/bpb", val_bpb, step)
                     writer.add_scalar("val/best", best_val, step)
+                    writer.add_scalar("val/acc", agg["acc"], step)
+                    writer.add_scalar("val/top5", agg["top5"], step)
+                    writer.add_scalar("val/ent", agg["ent"], step)
                     for name, v in domain_bpb.items():
                         writer.add_scalar(f"val_domain/{name}", v, step)
+                    for name, v in domain_acc.items():
+                        writer.add_scalar(f"val_domain_acc/{name}", v, step)
+                    for name, v in domain_top5.items():
+                        writer.add_scalar(f"val_domain_top5/{name}", v, step)
+                    for name, v in domain_ent.items():
+                        writer.add_scalar(f"val_domain_ent/{name}", v, step)
+                    for name, v in group_bpb.items():
+                        writer.add_scalar(f"val_group/{name}", v, step)
                     writer.add_scalar("params/global_norm", pnorm, step)
                     writer.flush()
                 sync.kick()
@@ -691,11 +780,37 @@ def main() -> None:
                 if writer is not None:
                     writer.add_text("samples", f"```\n{text}\n```", step)
 
+            if probe_runner is not None and step % args.probe_every == 0:
+                t_probe = time.perf_counter()
+                scalars = probe_runner.run()
+                dumps = probe_runner.probe_dumps(rotation=probe_round, k=2)
+                probe_round += 1
+                dt = time.perf_counter() - t_probe
+                brief = "  ".join(
+                    f"{k.removeprefix('probe/')}={v:.2f}"
+                    for k, v in sorted(scalars.items())
+                    if k in ("probe/identity/novel",
+                             "probe/facts/instances/heldout",
+                             "probe/verbatim/heldout"))
+                print(f"        probes: {len(scalars)} scalars in {dt:.0f}s  {brief}")
+                emit(metrics_f, event="probe", step=step, scalars=scalars,
+                     elapsed_s=dt)
+                for d in dumps:
+                    emit(metrics_f, event="probe_dump", step=step, **d)
+                if writer is not None:
+                    for k, v in scalars.items():
+                        writer.add_scalar(k, v, step)
+                    for d in dumps:
+                        writer.add_text(
+                            f"probe_dump/{d['id']}",
+                            f"**{d['prompt']}**\n\n```\n{d['text']}\n```", step)
+
             if step % args.save_every == 0:
                 ckpt_path = out_dir / f"step_{step}.pt"
                 full_save(ckpt_path, step)
                 update_symlink(out_dir, "latest.pt", ckpt_path)
-                pruned = prune_old_checkpoints(out_dir, args.keep_last)
+                pruned = prune_old_checkpoints(out_dir, args.keep_last,
+                                               args.keep_every)
                 msg = f"        saved {ckpt_path.name}  (latest -> {ckpt_path.name})"
                 if pruned:
                     msg += f"  pruned {len(pruned)}"
@@ -729,10 +844,11 @@ def main() -> None:
             if not final.exists():
                 full_save(final, last_step_done)
                 update_symlink(out_dir, "latest.pt", final)
-                prune_old_checkpoints(out_dir, args.keep_last)
+                prune_old_checkpoints(out_dir, args.keep_last, args.keep_every)
             print(f"final checkpoint: {final.name}")
             if best_step is not None:
-                print(f"best val_loss={best_val:.4f} at step {best_step} (best.pt)")
+                print(f"best val_bpb={best_val:.4f} at step {best_step} "
+                      f"(best.pt, trailing-{BEST_WINDOW} mean)")
             emit(
                 metrics_f,
                 event="end",

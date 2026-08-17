@@ -1,63 +1,3288 @@
 {
-  "_comment": "Closed-world basic-facts table for probes (docs/runs/gen4-eval-suite.md B3). Every entry: id, family, chat (question form), cloze (pretrain continuation form), answers (accepted strings, word-boundary matched, case/punct-insensitive), mode ('contains' default | 'prefix' for yes/no). Train/held-out split is computed from md5(id) — do not rename ids casually. Starter table ~60 entries; grow toward 300-500 for gen-4.",
-  "facts": [
-    {"id": "inst-animal", "family": "instances", "chat": "Name an animal.", "cloze": "Some common animals are the dog, the cat, and the", "answers": ["dog", "cat", "horse", "cow", "pig", "sheep", "goat", "lion", "tiger", "bear", "wolf", "fox", "rabbit", "mouse", "bird", "fish", "elephant", "monkey", "deer", "duck", "chicken", "snake", "frog"]},
-    {"id": "inst-color", "family": "instances", "chat": "Name a color.", "cloze": "Common colors include red, blue, and", "answers": ["red", "blue", "green", "yellow", "orange", "purple", "pink", "black", "white", "brown", "gray", "grey", "violet"]},
-    {"id": "inst-fruit", "family": "instances", "chat": "Name a fruit.", "cloze": "Fruits such as apples, oranges, and", "answers": ["apple", "orange", "banana", "pear", "grape", "peach", "plum", "cherry", "lemon", "mango", "melon", "berry", "strawberry", "apricot", "fig"]},
-    {"id": "inst-city", "family": "instances", "chat": "Name a city.", "cloze": "Great cities of the world include London, Paris, and", "answers": ["london", "paris", "rome", "berlin", "madrid", "moscow", "vienna", "tokyo", "beijing", "cairo", "athens", "amsterdam", "dublin", "lisbon", "chicago", "boston", "york"]},
-    {"id": "inst-day", "family": "instances", "chat": "Name a day of the week.", "cloze": "The days of the week are Monday, Tuesday,", "answers": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]},
-    {"id": "inst-month", "family": "instances", "chat": "Name a month of the year.", "cloze": "The months of the year include January, February, and", "answers": ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]},
-    {"id": "inst-body", "family": "instances", "chat": "Name a part of the body.", "cloze": "Parts of the body include the head, the hands, and the", "answers": ["head", "hand", "hands", "arm", "leg", "foot", "feet", "eye", "eyes", "ear", "nose", "mouth", "heart", "finger", "knee", "shoulder", "back"]},
-    {"id": "inst-instrument", "family": "instances", "chat": "Name a musical instrument.", "cloze": "Musical instruments such as the piano, the violin, and the", "answers": ["piano", "violin", "guitar", "drum", "drums", "flute", "trumpet", "cello", "harp", "organ", "horn", "clarinet"]},
-    {"id": "cap-france", "family": "capitals", "chat": "What is the capital of France?", "cloze": "The capital of France is", "answers": ["paris"]},
-    {"id": "cap-england", "family": "capitals", "chat": "What is the capital of England?", "cloze": "The capital of England is", "answers": ["london"]},
-    {"id": "cap-italy", "family": "capitals", "chat": "What is the capital of Italy?", "cloze": "The capital of Italy is", "answers": ["rome"]},
-    {"id": "cap-germany", "family": "capitals", "chat": "What is the capital of Germany?", "cloze": "The capital of Germany is", "answers": ["berlin"]},
-    {"id": "cap-spain", "family": "capitals", "chat": "What is the capital of Spain?", "cloze": "The capital of Spain is", "answers": ["madrid"]},
-    {"id": "cap-russia", "family": "capitals", "chat": "What is the capital of Russia?", "cloze": "The capital of Russia is", "answers": ["moscow"]},
-    {"id": "cap-japan", "family": "capitals", "chat": "What is the capital of Japan?", "cloze": "The capital of Japan is", "answers": ["tokyo"]},
-    {"id": "cap-usa", "family": "capitals", "chat": "What is the capital of the United States?", "cloze": "The capital of the United States is", "answers": ["washington"]},
-    {"id": "cap-greece", "family": "capitals", "chat": "What is the capital of Greece?", "cloze": "The capital of Greece is", "answers": ["athens"]},
-    {"id": "cap-austria", "family": "capitals", "chat": "What is the capital of Austria?", "cloze": "The capital of Austria is", "answers": ["vienna"]},
-    {"id": "cap-ireland", "family": "capitals", "chat": "What is the capital of Ireland?", "cloze": "The capital of Ireland is", "answers": ["dublin"]},
-    {"id": "cap-egypt", "family": "capitals", "chat": "What is the capital of Egypt?", "cloze": "The capital of Egypt is", "answers": ["cairo"]},
-    {"id": "attr-sky", "family": "attributes", "chat": "What color is the sky on a clear day?", "cloze": "On a clear day the color of the sky is", "answers": ["blue"]},
-    {"id": "attr-grass", "family": "attributes", "chat": "What color is grass?", "cloze": "The color of grass is", "answers": ["green"]},
-    {"id": "attr-snow", "family": "attributes", "chat": "What color is snow?", "cloze": "The color of snow is", "answers": ["white"]},
-    {"id": "attr-blood", "family": "attributes", "chat": "What color is blood?", "cloze": "The color of blood is", "answers": ["red"]},
-    {"id": "attr-sun", "family": "attributes", "chat": "Is the sun hot or cold?", "cloze": "The sun is very", "answers": ["hot"]},
-    {"id": "attr-ice", "family": "attributes", "chat": "Is ice hot or cold?", "cloze": "Ice is very", "answers": ["cold"]},
-    {"id": "attr-dog-sound", "family": "attributes", "chat": "What sound does a dog make?", "cloze": "A dog makes a sound called a", "answers": ["bark", "barks", "woof"]},
-    {"id": "attr-cat-sound", "family": "attributes", "chat": "What sound does a cat make?", "cloze": "The sound a cat makes is a", "answers": ["meow", "purr", "mew"]},
-    {"id": "attr-cow-sound", "family": "attributes", "chat": "What sound does a cow make?", "cloze": "The sound a cow makes is a", "answers": ["moo"]},
-    {"id": "attr-fish-live", "family": "attributes", "chat": "Where do fish live?", "cloze": "Fish live in the", "answers": ["water", "sea", "ocean", "river", "rivers", "lake", "lakes"]},
-    {"id": "attr-bird-fly", "family": "attributes", "chat": "How do birds travel through the air?", "cloze": "Birds travel through the air by", "answers": ["fly", "flying", "wings"]},
-    {"id": "attr-night-light", "family": "attributes", "chat": "What shines in the sky at night, the sun or the moon?", "cloze": "The light that shines in the sky at night is the", "answers": ["moon"]},
-    {"id": "count-week", "family": "counts", "chat": "How many days are in a week?", "cloze": "The number of days in a week is", "answers": ["7", "seven"]},
-    {"id": "count-year-months", "family": "counts", "chat": "How many months are in a year?", "cloze": "The number of months in a year is", "answers": ["12", "twelve"]},
-    {"id": "count-dog-legs", "family": "counts", "chat": "How many legs does a dog have?", "cloze": "A dog has this many legs:", "answers": ["4", "four"]},
-    {"id": "count-hands", "family": "counts", "chat": "How many hands does a person have?", "cloze": "A person has this many hands:", "answers": ["2", "two"]},
-    {"id": "count-fingers", "family": "counts", "chat": "How many fingers are on one hand?", "cloze": "The number of fingers on one hand is", "answers": ["5", "five"]},
-    {"id": "count-hour-minutes", "family": "counts", "chat": "How many minutes are in an hour?", "cloze": "The number of minutes in an hour is", "answers": ["60", "sixty"]},
-    {"id": "count-alphabet", "family": "counts", "chat": "How many letters are in the English alphabet?", "cloze": "The number of letters in the English alphabet is", "answers": ["26", "twenty-six", "twenty six"]},
-    {"id": "count-triangle", "family": "counts", "chat": "How many sides does a triangle have?", "cloze": "A triangle has this many sides:", "answers": ["3", "three"]},
-    {"id": "opp-hot", "family": "opposites", "chat": "What is the opposite of hot?", "cloze": "The opposite of hot is", "answers": ["cold"]},
-    {"id": "opp-big", "family": "opposites", "chat": "What is the opposite of big?", "cloze": "The opposite of big is", "answers": ["small", "little"]},
-    {"id": "opp-up", "family": "opposites", "chat": "What is the opposite of up?", "cloze": "The opposite of up is", "answers": ["down"]},
-    {"id": "opp-day", "family": "opposites", "chat": "What is the opposite of day?", "cloze": "The opposite of day is", "answers": ["night"]},
-    {"id": "opp-fast", "family": "opposites", "chat": "What is the opposite of fast?", "cloze": "The opposite of fast is", "answers": ["slow"]},
-    {"id": "opp-happy", "family": "opposites", "chat": "What is the opposite of happy?", "cloze": "The opposite of happy is", "answers": ["sad", "unhappy"]},
-    {"id": "opp-light", "family": "opposites", "chat": "What is the opposite of light?", "cloze": "The opposite of light is", "answers": ["dark", "darkness", "heavy"]},
-    {"id": "opp-open", "family": "opposites", "chat": "What is the opposite of open?", "cloze": "The opposite of open is", "answers": ["closed", "shut"]},
-    {"id": "opp-wet", "family": "opposites", "chat": "What is the opposite of wet?", "cloze": "The opposite of wet is", "answers": ["dry"]},
-    {"id": "opp-old", "family": "opposites", "chat": "What is the opposite of old?", "cloze": "The opposite of old is", "answers": ["new", "young"]},
-    {"id": "mem-dog-animal", "family": "membership", "mode": "prefix", "chat": "Is a dog an animal? Answer yes or no.", "cloze": "Question: is a dog an animal? Answer:", "answers": ["yes"]},
-    {"id": "mem-rose-animal", "family": "membership", "mode": "prefix", "chat": "Is a rose an animal? Answer yes or no.", "cloze": "Question: is a rose an animal? Answer:", "answers": ["no"]},
-    {"id": "mem-apple-fruit", "family": "membership", "mode": "prefix", "chat": "Is an apple a fruit? Answer yes or no.", "cloze": "Question: is an apple a fruit? Answer:", "answers": ["yes"]},
-    {"id": "mem-paris-city", "family": "membership", "mode": "prefix", "chat": "Is Paris a city? Answer yes or no.", "cloze": "Question: is Paris a city? Answer:", "answers": ["yes"]},
-    {"id": "mem-blue-animal", "family": "membership", "mode": "prefix", "chat": "Is blue an animal? Answer yes or no.", "cloze": "Question: is blue an animal? Answer:", "answers": ["no"]},
-    {"id": "mem-cat-fish", "family": "membership", "mode": "prefix", "chat": "Is a cat a fish? Answer yes or no.", "cloze": "Question: is a cat a fish? Answer:", "answers": ["no"]},
-    {"id": "mem-piano-instrument", "family": "membership", "mode": "prefix", "chat": "Is a piano a musical instrument? Answer yes or no.", "cloze": "Question: is a piano a musical instrument? Answer:", "answers": ["yes"]},
-    {"id": "mem-monday-day", "family": "membership", "mode": "prefix", "chat": "Is Monday a day of the week? Answer yes or no.", "cloze": "Question: is Monday a day of the week? Answer:", "answers": ["yes"]}
-  ]
+ "facts": [
+  {
+   "id": "inst-animal",
+   "family": "instances",
+   "chat": "Name an animal.",
+   "cloze": "Some common animals are the dog, the cat, and the",
+   "answers": [
+    "dog",
+    "cat",
+    "horse",
+    "cow",
+    "pig",
+    "sheep",
+    "goat",
+    "lion",
+    "tiger",
+    "bear",
+    "wolf",
+    "fox",
+    "rabbit",
+    "mouse",
+    "bird",
+    "fish",
+    "elephant",
+    "monkey",
+    "deer",
+    "duck",
+    "chicken",
+    "snake",
+    "frog"
+   ]
+  },
+  {
+   "id": "inst-color",
+   "family": "instances",
+   "chat": "Name a color.",
+   "cloze": "Common colors include red, blue, and",
+   "answers": [
+    "red",
+    "blue",
+    "green",
+    "yellow",
+    "orange",
+    "purple",
+    "pink",
+    "black",
+    "white",
+    "brown",
+    "gray",
+    "grey",
+    "violet"
+   ]
+  },
+  {
+   "id": "inst-fruit",
+   "family": "instances",
+   "chat": "Name a fruit.",
+   "cloze": "Fruits such as apples, oranges, and",
+   "answers": [
+    "apple",
+    "orange",
+    "banana",
+    "pear",
+    "grape",
+    "peach",
+    "plum",
+    "cherry",
+    "lemon",
+    "mango",
+    "melon",
+    "berry",
+    "strawberry",
+    "apricot",
+    "fig"
+   ]
+  },
+  {
+   "id": "inst-city",
+   "family": "instances",
+   "chat": "Name a city.",
+   "cloze": "Great cities of the world include London, Paris, and",
+   "answers": [
+    "london",
+    "paris",
+    "rome",
+    "berlin",
+    "madrid",
+    "moscow",
+    "vienna",
+    "tokyo",
+    "beijing",
+    "cairo",
+    "athens",
+    "amsterdam",
+    "dublin",
+    "lisbon",
+    "chicago",
+    "boston",
+    "york"
+   ]
+  },
+  {
+   "id": "inst-day",
+   "family": "instances",
+   "chat": "Name a day of the week.",
+   "cloze": "The days of the week are Monday, Tuesday,",
+   "answers": [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday"
+   ]
+  },
+  {
+   "id": "inst-month",
+   "family": "instances",
+   "chat": "Name a month of the year.",
+   "cloze": "The months of the year include January, February, and",
+   "answers": [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december"
+   ]
+  },
+  {
+   "id": "inst-body",
+   "family": "instances",
+   "chat": "Name a part of the body.",
+   "cloze": "Parts of the body include the head, the hands, and the",
+   "answers": [
+    "head",
+    "hand",
+    "hands",
+    "arm",
+    "leg",
+    "foot",
+    "feet",
+    "eye",
+    "eyes",
+    "ear",
+    "nose",
+    "mouth",
+    "heart",
+    "finger",
+    "knee",
+    "shoulder",
+    "back"
+   ]
+  },
+  {
+   "id": "inst-instrument",
+   "family": "instances",
+   "chat": "Name a musical instrument.",
+   "cloze": "Musical instruments such as the piano, the violin, and the",
+   "answers": [
+    "piano",
+    "violin",
+    "guitar",
+    "drum",
+    "drums",
+    "flute",
+    "trumpet",
+    "cello",
+    "harp",
+    "organ",
+    "horn",
+    "clarinet"
+   ]
+  },
+  {
+   "id": "cap-france",
+   "family": "capitals",
+   "chat": "What is the capital of France?",
+   "cloze": "The capital of France is",
+   "answers": [
+    "paris"
+   ]
+  },
+  {
+   "id": "cap-england",
+   "family": "capitals",
+   "chat": "What is the capital of England?",
+   "cloze": "The capital of England is",
+   "answers": [
+    "london"
+   ]
+  },
+  {
+   "id": "cap-italy",
+   "family": "capitals",
+   "chat": "What is the capital of Italy?",
+   "cloze": "The capital of Italy is",
+   "answers": [
+    "rome"
+   ]
+  },
+  {
+   "id": "cap-germany",
+   "family": "capitals",
+   "chat": "What is the capital of Germany?",
+   "cloze": "The capital of Germany is",
+   "answers": [
+    "berlin"
+   ]
+  },
+  {
+   "id": "cap-spain",
+   "family": "capitals",
+   "chat": "What is the capital of Spain?",
+   "cloze": "The capital of Spain is",
+   "answers": [
+    "madrid"
+   ]
+  },
+  {
+   "id": "cap-russia",
+   "family": "capitals",
+   "chat": "What is the capital of Russia?",
+   "cloze": "The capital of Russia is",
+   "answers": [
+    "moscow"
+   ]
+  },
+  {
+   "id": "cap-japan",
+   "family": "capitals",
+   "chat": "What is the capital of Japan?",
+   "cloze": "The capital of Japan is",
+   "answers": [
+    "tokyo"
+   ]
+  },
+  {
+   "id": "cap-usa",
+   "family": "capitals",
+   "chat": "What is the capital of the United States?",
+   "cloze": "The capital of the United States is",
+   "answers": [
+    "washington"
+   ]
+  },
+  {
+   "id": "cap-greece",
+   "family": "capitals",
+   "chat": "What is the capital of Greece?",
+   "cloze": "The capital of Greece is",
+   "answers": [
+    "athens"
+   ]
+  },
+  {
+   "id": "cap-austria",
+   "family": "capitals",
+   "chat": "What is the capital of Austria?",
+   "cloze": "The capital of Austria is",
+   "answers": [
+    "vienna"
+   ]
+  },
+  {
+   "id": "cap-ireland",
+   "family": "capitals",
+   "chat": "What is the capital of Ireland?",
+   "cloze": "The capital of Ireland is",
+   "answers": [
+    "dublin"
+   ]
+  },
+  {
+   "id": "cap-egypt",
+   "family": "capitals",
+   "chat": "What is the capital of Egypt?",
+   "cloze": "The capital of Egypt is",
+   "answers": [
+    "cairo"
+   ]
+  },
+  {
+   "id": "attr-sky",
+   "family": "attributes",
+   "chat": "What color is the sky on a clear day?",
+   "cloze": "On a clear day the color of the sky is",
+   "answers": [
+    "blue"
+   ]
+  },
+  {
+   "id": "attr-grass",
+   "family": "attributes",
+   "chat": "What color is grass?",
+   "cloze": "The color of grass is",
+   "answers": [
+    "green"
+   ]
+  },
+  {
+   "id": "attr-snow",
+   "family": "attributes",
+   "chat": "What color is snow?",
+   "cloze": "The color of snow is",
+   "answers": [
+    "white"
+   ]
+  },
+  {
+   "id": "attr-blood",
+   "family": "attributes",
+   "chat": "What color is blood?",
+   "cloze": "The color of blood is",
+   "answers": [
+    "red"
+   ]
+  },
+  {
+   "id": "attr-sun",
+   "family": "attributes",
+   "chat": "Is the sun hot or cold?",
+   "cloze": "The sun is very",
+   "answers": [
+    "hot"
+   ],
+   "reject": [
+    "cold"
+   ]
+  },
+  {
+   "id": "attr-ice",
+   "family": "attributes",
+   "chat": "Is ice hot or cold?",
+   "cloze": "Ice is very",
+   "answers": [
+    "cold"
+   ],
+   "reject": [
+    "hot"
+   ]
+  },
+  {
+   "id": "attr-dog-sound",
+   "family": "attributes",
+   "chat": "What sound does a dog make?",
+   "cloze": "A dog makes a sound called a",
+   "answers": [
+    "bark",
+    "barks",
+    "woof"
+   ]
+  },
+  {
+   "id": "attr-cat-sound",
+   "family": "attributes",
+   "chat": "What sound does a cat make?",
+   "cloze": "The sound a cat makes is a",
+   "answers": [
+    "meow",
+    "purr",
+    "mew"
+   ]
+  },
+  {
+   "id": "attr-cow-sound",
+   "family": "attributes",
+   "chat": "What sound does a cow make?",
+   "cloze": "The sound a cow makes is a",
+   "answers": [
+    "moo"
+   ]
+  },
+  {
+   "id": "attr-fish-live",
+   "family": "attributes",
+   "chat": "Where do fish live?",
+   "cloze": "Fish live in the",
+   "answers": [
+    "water",
+    "sea",
+    "ocean",
+    "river",
+    "rivers",
+    "lake",
+    "lakes"
+   ]
+  },
+  {
+   "id": "attr-bird-fly",
+   "family": "attributes",
+   "chat": "How do birds travel through the air?",
+   "cloze": "Birds travel through the air by",
+   "answers": [
+    "fly",
+    "flying",
+    "wings"
+   ]
+  },
+  {
+   "id": "attr-night-light",
+   "family": "attributes",
+   "chat": "What shines in the sky at night, the sun or the moon?",
+   "cloze": "The light that shines in the sky at night is the",
+   "answers": [
+    "moon"
+   ],
+   "reject": [
+    "sun"
+   ]
+  },
+  {
+   "id": "count-week",
+   "family": "counts",
+   "chat": "How many days are in a week?",
+   "cloze": "The number of days in a week is",
+   "answers": [
+    "7",
+    "seven"
+   ]
+  },
+  {
+   "id": "count-year-months",
+   "family": "counts",
+   "chat": "How many months are in a year?",
+   "cloze": "The number of months in a year is",
+   "answers": [
+    "12",
+    "twelve"
+   ]
+  },
+  {
+   "id": "count-dog-legs",
+   "family": "counts",
+   "chat": "How many legs does a dog have?",
+   "cloze": "A dog has this many legs:",
+   "answers": [
+    "4",
+    "four"
+   ]
+  },
+  {
+   "id": "count-hands",
+   "family": "counts",
+   "chat": "How many hands does a person have?",
+   "cloze": "A person has this many hands:",
+   "answers": [
+    "2",
+    "two"
+   ]
+  },
+  {
+   "id": "count-fingers",
+   "family": "counts",
+   "chat": "How many fingers are on one hand?",
+   "cloze": "The number of fingers on one hand is",
+   "answers": [
+    "5",
+    "five"
+   ]
+  },
+  {
+   "id": "count-hour-minutes",
+   "family": "counts",
+   "chat": "How many minutes are in an hour?",
+   "cloze": "The number of minutes in an hour is",
+   "answers": [
+    "60",
+    "sixty"
+   ]
+  },
+  {
+   "id": "count-alphabet",
+   "family": "counts",
+   "chat": "How many letters are in the English alphabet?",
+   "cloze": "The number of letters in the English alphabet is",
+   "answers": [
+    "26",
+    "twenty-six",
+    "twenty six"
+   ]
+  },
+  {
+   "id": "count-triangle",
+   "family": "counts",
+   "chat": "How many sides does a triangle have?",
+   "cloze": "A triangle has this many sides:",
+   "answers": [
+    "3",
+    "three"
+   ]
+  },
+  {
+   "id": "opp-hot",
+   "family": "opposites",
+   "chat": "What is the opposite of hot?",
+   "cloze": "The opposite of hot is",
+   "answers": [
+    "cold"
+   ]
+  },
+  {
+   "id": "opp-big",
+   "family": "opposites",
+   "chat": "What is the opposite of big?",
+   "cloze": "The opposite of big is",
+   "answers": [
+    "small",
+    "little"
+   ]
+  },
+  {
+   "id": "opp-up",
+   "family": "opposites",
+   "chat": "What is the opposite of up?",
+   "cloze": "The opposite of up is",
+   "answers": [
+    "down"
+   ]
+  },
+  {
+   "id": "opp-day",
+   "family": "opposites",
+   "chat": "What is the opposite of day?",
+   "cloze": "The opposite of day is",
+   "answers": [
+    "night"
+   ]
+  },
+  {
+   "id": "opp-fast",
+   "family": "opposites",
+   "chat": "What is the opposite of fast?",
+   "cloze": "The opposite of fast is",
+   "answers": [
+    "slow"
+   ]
+  },
+  {
+   "id": "opp-happy",
+   "family": "opposites",
+   "chat": "What is the opposite of happy?",
+   "cloze": "The opposite of happy is",
+   "answers": [
+    "sad",
+    "unhappy"
+   ]
+  },
+  {
+   "id": "opp-light",
+   "family": "opposites",
+   "chat": "What is the opposite of light?",
+   "cloze": "The opposite of light is",
+   "answers": [
+    "dark",
+    "darkness",
+    "heavy"
+   ]
+  },
+  {
+   "id": "opp-open",
+   "family": "opposites",
+   "chat": "What is the opposite of open?",
+   "cloze": "The opposite of open is",
+   "answers": [
+    "closed",
+    "shut"
+   ]
+  },
+  {
+   "id": "opp-wet",
+   "family": "opposites",
+   "chat": "What is the opposite of wet?",
+   "cloze": "The opposite of wet is",
+   "answers": [
+    "dry"
+   ]
+  },
+  {
+   "id": "opp-old",
+   "family": "opposites",
+   "chat": "What is the opposite of old?",
+   "cloze": "The opposite of old is",
+   "answers": [
+    "new",
+    "young"
+   ]
+  },
+  {
+   "id": "mem-dog-animal",
+   "family": "membership",
+   "mode": "prefix",
+   "chat": "Is a dog an animal? Answer yes or no.",
+   "cloze": "Question: is a dog an animal? Answer:",
+   "answers": [
+    "yes"
+   ]
+  },
+  {
+   "id": "mem-rose-animal",
+   "family": "membership",
+   "mode": "prefix",
+   "chat": "Is a rose an animal? Answer yes or no.",
+   "cloze": "Question: is a rose an animal? Answer:",
+   "answers": [
+    "no"
+   ]
+  },
+  {
+   "id": "mem-apple-fruit",
+   "family": "membership",
+   "mode": "prefix",
+   "chat": "Is an apple a fruit? Answer yes or no.",
+   "cloze": "Question: is an apple a fruit? Answer:",
+   "answers": [
+    "yes"
+   ]
+  },
+  {
+   "id": "mem-paris-city",
+   "family": "membership",
+   "mode": "prefix",
+   "chat": "Is Paris a city? Answer yes or no.",
+   "cloze": "Question: is Paris a city? Answer:",
+   "answers": [
+    "yes"
+   ]
+  },
+  {
+   "id": "mem-blue-animal",
+   "family": "membership",
+   "mode": "prefix",
+   "chat": "Is blue an animal? Answer yes or no.",
+   "cloze": "Question: is blue an animal? Answer:",
+   "answers": [
+    "no"
+   ]
+  },
+  {
+   "id": "mem-cat-fish",
+   "family": "membership",
+   "mode": "prefix",
+   "chat": "Is a cat a fish? Answer yes or no.",
+   "cloze": "Question: is a cat a fish? Answer:",
+   "answers": [
+    "no"
+   ]
+  },
+  {
+   "id": "mem-piano-instrument",
+   "family": "membership",
+   "mode": "prefix",
+   "chat": "Is a piano a musical instrument? Answer yes or no.",
+   "cloze": "Question: is a piano a musical instrument? Answer:",
+   "answers": [
+    "yes"
+   ]
+  },
+  {
+   "id": "mem-monday-day",
+   "family": "membership",
+   "mode": "prefix",
+   "chat": "Is Monday a day of the week? Answer yes or no.",
+   "cloze": "Question: is Monday a day of the week? Answer:",
+   "answers": [
+    "yes"
+   ]
+  },
+  {
+   "id": "cap-portugal",
+   "family": "capitals",
+   "chat": "What is the capital of Portugal?",
+   "cloze": "The capital of Portugal is",
+   "answers": [
+    "lisbon"
+   ]
+  },
+  {
+   "id": "cap-netherlands",
+   "family": "capitals",
+   "chat": "What is the capital of the Netherlands?",
+   "cloze": "The capital of the Netherlands is",
+   "answers": [
+    "amsterdam"
+   ]
+  },
+  {
+   "id": "cap-belgium",
+   "family": "capitals",
+   "chat": "What is the capital of Belgium?",
+   "cloze": "The capital of Belgium is",
+   "answers": [
+    "brussels"
+   ]
+  },
+  {
+   "id": "cap-switzerland",
+   "family": "capitals",
+   "chat": "What is the capital of Switzerland?",
+   "cloze": "The capital of Switzerland is",
+   "answers": [
+    "bern"
+   ]
+  },
+  {
+   "id": "cap-sweden",
+   "family": "capitals",
+   "chat": "What is the capital of Sweden?",
+   "cloze": "The capital of Sweden is",
+   "answers": [
+    "stockholm"
+   ]
+  },
+  {
+   "id": "cap-norway",
+   "family": "capitals",
+   "chat": "What is the capital of Norway?",
+   "cloze": "The capital of Norway is",
+   "answers": [
+    "oslo"
+   ]
+  },
+  {
+   "id": "cap-denmark",
+   "family": "capitals",
+   "chat": "What is the capital of Denmark?",
+   "cloze": "The capital of Denmark is",
+   "answers": [
+    "copenhagen"
+   ]
+  },
+  {
+   "id": "cap-finland",
+   "family": "capitals",
+   "chat": "What is the capital of Finland?",
+   "cloze": "The capital of Finland is",
+   "answers": [
+    "helsinki"
+   ]
+  },
+  {
+   "id": "cap-iceland",
+   "family": "capitals",
+   "chat": "What is the capital of Iceland?",
+   "cloze": "The capital of Iceland is",
+   "answers": [
+    "reykjavik"
+   ]
+  },
+  {
+   "id": "cap-poland",
+   "family": "capitals",
+   "chat": "What is the capital of Poland?",
+   "cloze": "The capital of Poland is",
+   "answers": [
+    "warsaw"
+   ]
+  },
+  {
+   "id": "cap-czechia",
+   "family": "capitals",
+   "chat": "What is the capital of the Czech Republic?",
+   "cloze": "The capital of the Czech Republic is",
+   "answers": [
+    "prague"
+   ]
+  },
+  {
+   "id": "cap-hungary",
+   "family": "capitals",
+   "chat": "What is the capital of Hungary?",
+   "cloze": "The capital of Hungary is",
+   "answers": [
+    "budapest"
+   ]
+  },
+  {
+   "id": "cap-romania",
+   "family": "capitals",
+   "chat": "What is the capital of Romania?",
+   "cloze": "The capital of Romania is",
+   "answers": [
+    "bucharest"
+   ]
+  },
+  {
+   "id": "cap-ukraine",
+   "family": "capitals",
+   "chat": "What is the capital of Ukraine?",
+   "cloze": "The capital of Ukraine is",
+   "answers": [
+    "kyiv",
+    "kiev"
+   ]
+  },
+  {
+   "id": "cap-turkey",
+   "family": "capitals",
+   "chat": "What is the capital of Turkey?",
+   "cloze": "The capital of Turkey is",
+   "answers": [
+    "ankara"
+   ]
+  },
+  {
+   "id": "cap-scotland",
+   "family": "capitals",
+   "chat": "What is the capital of Scotland?",
+   "cloze": "The capital of Scotland is",
+   "answers": [
+    "edinburgh"
+   ]
+  },
+  {
+   "id": "cap-china",
+   "family": "capitals",
+   "chat": "What is the capital of China?",
+   "cloze": "The capital of China is",
+   "answers": [
+    "beijing"
+   ]
+  },
+  {
+   "id": "cap-india",
+   "family": "capitals",
+   "chat": "What is the capital of India?",
+   "cloze": "The capital of India is",
+   "answers": [
+    "new delhi",
+    "delhi"
+   ]
+  },
+  {
+   "id": "cap-south-korea",
+   "family": "capitals",
+   "chat": "What is the capital of South Korea?",
+   "cloze": "The capital of South Korea is",
+   "answers": [
+    "seoul"
+   ]
+  },
+  {
+   "id": "cap-thailand",
+   "family": "capitals",
+   "chat": "What is the capital of Thailand?",
+   "cloze": "The capital of Thailand is",
+   "answers": [
+    "bangkok"
+   ]
+  },
+  {
+   "id": "cap-vietnam",
+   "family": "capitals",
+   "chat": "What is the capital of Vietnam?",
+   "cloze": "The capital of Vietnam is",
+   "answers": [
+    "hanoi"
+   ]
+  },
+  {
+   "id": "cap-indonesia",
+   "family": "capitals",
+   "chat": "What is the capital of Indonesia?",
+   "cloze": "The capital of Indonesia is",
+   "answers": [
+    "jakarta"
+   ]
+  },
+  {
+   "id": "cap-philippines",
+   "family": "capitals",
+   "chat": "What is the capital of the Philippines?",
+   "cloze": "The capital of the Philippines is",
+   "answers": [
+    "manila"
+   ]
+  },
+  {
+   "id": "cap-iran",
+   "family": "capitals",
+   "chat": "What is the capital of Iran?",
+   "cloze": "The capital of Iran is",
+   "answers": [
+    "tehran"
+   ]
+  },
+  {
+   "id": "cap-iraq",
+   "family": "capitals",
+   "chat": "What is the capital of Iraq?",
+   "cloze": "The capital of Iraq is",
+   "answers": [
+    "baghdad"
+   ]
+  },
+  {
+   "id": "cap-saudi-arabia",
+   "family": "capitals",
+   "chat": "What is the capital of Saudi Arabia?",
+   "cloze": "The capital of Saudi Arabia is",
+   "answers": [
+    "riyadh"
+   ]
+  },
+  {
+   "id": "cap-canada",
+   "family": "capitals",
+   "chat": "What is the capital of Canada?",
+   "cloze": "The capital of Canada is",
+   "answers": [
+    "ottawa"
+   ]
+  },
+  {
+   "id": "cap-mexico",
+   "family": "capitals",
+   "chat": "What is the capital of Mexico?",
+   "cloze": "The capital of Mexico is",
+   "answers": [
+    "mexico city"
+   ]
+  },
+  {
+   "id": "cap-brazil",
+   "family": "capitals",
+   "chat": "What is the capital of Brazil?",
+   "cloze": "The capital of Brazil is",
+   "answers": [
+    "brasilia"
+   ]
+  },
+  {
+   "id": "cap-argentina",
+   "family": "capitals",
+   "chat": "What is the capital of Argentina?",
+   "cloze": "The capital of Argentina is",
+   "answers": [
+    "buenos aires"
+   ]
+  },
+  {
+   "id": "cap-peru",
+   "family": "capitals",
+   "chat": "What is the capital of Peru?",
+   "cloze": "The capital of Peru is",
+   "answers": [
+    "lima"
+   ]
+  },
+  {
+   "id": "cap-chile",
+   "family": "capitals",
+   "chat": "What is the capital of Chile?",
+   "cloze": "The capital of Chile is",
+   "answers": [
+    "santiago"
+   ]
+  },
+  {
+   "id": "cap-colombia",
+   "family": "capitals",
+   "chat": "What is the capital of Colombia?",
+   "cloze": "The capital of Colombia is",
+   "answers": [
+    "bogota"
+   ]
+  },
+  {
+   "id": "cap-cuba",
+   "family": "capitals",
+   "chat": "What is the capital of Cuba?",
+   "cloze": "The capital of Cuba is",
+   "answers": [
+    "havana"
+   ]
+  },
+  {
+   "id": "cap-australia",
+   "family": "capitals",
+   "chat": "What is the capital of Australia?",
+   "cloze": "The capital of Australia is",
+   "answers": [
+    "canberra"
+   ]
+  },
+  {
+   "id": "cap-new-zealand",
+   "family": "capitals",
+   "chat": "What is the capital of New Zealand?",
+   "cloze": "The capital of New Zealand is",
+   "answers": [
+    "wellington"
+   ]
+  },
+  {
+   "id": "cap-kenya",
+   "family": "capitals",
+   "chat": "What is the capital of Kenya?",
+   "cloze": "The capital of Kenya is",
+   "answers": [
+    "nairobi"
+   ]
+  },
+  {
+   "id": "cap-ethiopia",
+   "family": "capitals",
+   "chat": "What is the capital of Ethiopia?",
+   "cloze": "The capital of Ethiopia is",
+   "answers": [
+    "addis ababa"
+   ]
+  },
+  {
+   "id": "cap-morocco",
+   "family": "capitals",
+   "chat": "What is the capital of Morocco?",
+   "cloze": "The capital of Morocco is",
+   "answers": [
+    "rabat"
+   ]
+  },
+  {
+   "id": "inst-vegetable",
+   "family": "instances",
+   "chat": "Name a vegetable.",
+   "cloze": "Common vegetables are the carrot, the pea, and the",
+   "answers": [
+    "carrot",
+    "pea",
+    "potato",
+    "onion",
+    "cabbage",
+    "bean",
+    "corn",
+    "lettuce",
+    "spinach",
+    "broccoli",
+    "tomato",
+    "pepper",
+    "cucumber",
+    "pumpkin",
+    "turnip",
+    "celery",
+    "beet",
+    "radish"
+   ]
+  },
+  {
+   "id": "inst-tree",
+   "family": "instances",
+   "chat": "Name a kind of tree.",
+   "cloze": "Common trees include the oak, the pine, and the",
+   "answers": [
+    "oak",
+    "pine",
+    "maple",
+    "birch",
+    "elm",
+    "willow",
+    "cedar",
+    "ash",
+    "beech",
+    "fir",
+    "spruce",
+    "chestnut",
+    "palm",
+    "cherry",
+    "apple",
+    "poplar",
+    "cypress",
+    "yew"
+   ]
+  },
+  {
+   "id": "inst-flower",
+   "family": "instances",
+   "chat": "Name a flower.",
+   "cloze": "Common flowers are the rose, the daisy, and the",
+   "answers": [
+    "rose",
+    "daisy",
+    "tulip",
+    "lily",
+    "violet",
+    "sunflower",
+    "orchid",
+    "daffodil",
+    "poppy",
+    "iris",
+    "carnation",
+    "peony",
+    "marigold",
+    "lavender",
+    "buttercup"
+   ]
+  },
+  {
+   "id": "inst-bird",
+   "family": "instances",
+   "chat": "Name a bird.",
+   "cloze": "Common birds include the sparrow, the crow, and the",
+   "answers": [
+    "sparrow",
+    "crow",
+    "robin",
+    "eagle",
+    "owl",
+    "hawk",
+    "pigeon",
+    "duck",
+    "goose",
+    "swan",
+    "gull",
+    "raven",
+    "finch",
+    "wren",
+    "swallow",
+    "parrot",
+    "penguin",
+    "stork",
+    "heron",
+    "falcon"
+   ]
+  },
+  {
+   "id": "inst-fish",
+   "family": "instances",
+   "chat": "Name a kind of fish.",
+   "cloze": "Kinds of fish include the salmon, the trout, and the",
+   "answers": [
+    "salmon",
+    "trout",
+    "cod",
+    "tuna",
+    "herring",
+    "bass",
+    "pike",
+    "carp",
+    "perch",
+    "mackerel",
+    "sardine",
+    "shark",
+    "eel",
+    "haddock",
+    "flounder"
+   ]
+  },
+  {
+   "id": "inst-insect",
+   "family": "instances",
+   "chat": "Name an insect.",
+   "cloze": "Common insects are the ant, the bee, and the",
+   "answers": [
+    "ant",
+    "bee",
+    "fly",
+    "beetle",
+    "butterfly",
+    "moth",
+    "wasp",
+    "cricket",
+    "grasshopper",
+    "dragonfly",
+    "ladybug",
+    "mosquito",
+    "termite",
+    "cicada"
+   ]
+  },
+  {
+   "id": "inst-country",
+   "family": "instances",
+   "chat": "Name a country.",
+   "cloze": "Countries of the world include France, Japan, and",
+   "answers": [
+    "france",
+    "japan",
+    "england",
+    "spain",
+    "italy",
+    "germany",
+    "russia",
+    "china",
+    "india",
+    "brazil",
+    "canada",
+    "mexico",
+    "egypt",
+    "greece",
+    "america",
+    "australia",
+    "portugal",
+    "poland",
+    "turkey",
+    "kenya",
+    "peru",
+    "chile",
+    "norway",
+    "sweden"
+   ]
+  },
+  {
+   "id": "inst-language",
+   "family": "instances",
+   "chat": "Name a language.",
+   "cloze": "Languages of the world include English, French, and",
+   "answers": [
+    "english",
+    "french",
+    "spanish",
+    "german",
+    "italian",
+    "russian",
+    "chinese",
+    "japanese",
+    "arabic",
+    "portuguese",
+    "hindi",
+    "greek",
+    "latin",
+    "dutch",
+    "korean",
+    "turkish",
+    "polish",
+    "swedish"
+   ]
+  },
+  {
+   "id": "inst-sport",
+   "family": "instances",
+   "chat": "Name a sport.",
+   "cloze": "Popular sports include soccer, tennis, and",
+   "answers": [
+    "soccer",
+    "tennis",
+    "football",
+    "baseball",
+    "basketball",
+    "cricket",
+    "golf",
+    "hockey",
+    "rugby",
+    "swimming",
+    "boxing",
+    "running",
+    "cycling",
+    "skiing",
+    "volleyball",
+    "wrestling"
+   ]
+  },
+  {
+   "id": "inst-drink",
+   "family": "instances",
+   "chat": "Name something people drink.",
+   "cloze": "Common drinks are water, tea, and",
+   "answers": [
+    "water",
+    "tea",
+    "coffee",
+    "milk",
+    "juice",
+    "lemonade",
+    "wine",
+    "beer",
+    "cider",
+    "cocoa",
+    "soda"
+   ]
+  },
+  {
+   "id": "inst-metal",
+   "family": "instances",
+   "chat": "Name a metal.",
+   "cloze": "Common metals are iron, gold, and",
+   "answers": [
+    "iron",
+    "gold",
+    "silver",
+    "copper",
+    "tin",
+    "lead",
+    "zinc",
+    "steel",
+    "brass",
+    "bronze",
+    "aluminum",
+    "nickel",
+    "platinum"
+   ]
+  },
+  {
+   "id": "inst-planet",
+   "family": "instances",
+   "chat": "Name a planet.",
+   "cloze": "The planets include Mars, Venus, and",
+   "answers": [
+    "mars",
+    "venus",
+    "mercury",
+    "earth",
+    "jupiter",
+    "saturn",
+    "uranus",
+    "neptune"
+   ]
+  },
+  {
+   "id": "inst-season",
+   "family": "instances",
+   "chat": "Name a season of the year.",
+   "cloze": "The seasons of the year are summer, winter, and",
+   "answers": [
+    "summer",
+    "winter",
+    "spring",
+    "autumn",
+    "fall"
+   ]
+  },
+  {
+   "id": "inst-shape",
+   "family": "instances",
+   "chat": "Name a shape.",
+   "cloze": "Simple shapes include the circle, the square, and the",
+   "answers": [
+    "circle",
+    "square",
+    "triangle",
+    "rectangle",
+    "oval",
+    "diamond",
+    "star",
+    "cube",
+    "sphere",
+    "hexagon",
+    "pentagon"
+   ]
+  },
+  {
+   "id": "inst-weather",
+   "family": "instances",
+   "chat": "Name a kind of weather.",
+   "cloze": "Kinds of weather include rain, snow, and",
+   "answers": [
+    "rain",
+    "snow",
+    "wind",
+    "sun",
+    "sunshine",
+    "fog",
+    "hail",
+    "storm",
+    "thunder",
+    "sleet",
+    "clouds",
+    "drizzle"
+   ]
+  },
+  {
+   "id": "inst-vehicle",
+   "family": "instances",
+   "chat": "Name a vehicle.",
+   "cloze": "Common vehicles are the car, the bus, and the",
+   "answers": [
+    "car",
+    "bus",
+    "train",
+    "truck",
+    "bicycle",
+    "boat",
+    "ship",
+    "airplane",
+    "plane",
+    "motorcycle",
+    "van",
+    "tram",
+    "wagon",
+    "carriage",
+    "cart"
+   ]
+  },
+  {
+   "id": "inst-profession",
+   "family": "instances",
+   "chat": "Name a profession.",
+   "cloze": "Common professions include doctor, teacher, and",
+   "answers": [
+    "doctor",
+    "teacher",
+    "farmer",
+    "lawyer",
+    "nurse",
+    "engineer",
+    "baker",
+    "butcher",
+    "carpenter",
+    "soldier",
+    "sailor",
+    "cook",
+    "painter",
+    "tailor",
+    "blacksmith",
+    "merchant",
+    "clerk",
+    "librarian",
+    "pilot"
+   ]
+  },
+  {
+   "id": "inst-gem",
+   "family": "instances",
+   "chat": "Name a precious stone.",
+   "cloze": "Precious stones include the diamond, the ruby, and the",
+   "answers": [
+    "diamond",
+    "ruby",
+    "emerald",
+    "sapphire",
+    "pearl",
+    "opal",
+    "amethyst",
+    "topaz",
+    "garnet",
+    "jade"
+   ]
+  },
+  {
+   "id": "attr-banana-color",
+   "family": "attributes",
+   "chat": "What color is a ripe banana?",
+   "cloze": "A ripe banana is the color",
+   "answers": [
+    "yellow"
+   ]
+  },
+  {
+   "id": "attr-chocolate-color",
+   "family": "attributes",
+   "chat": "What color is chocolate?",
+   "cloze": "Chocolate is the color",
+   "answers": [
+    "brown"
+   ]
+  },
+  {
+   "id": "attr-coal-color",
+   "family": "attributes",
+   "chat": "What color is coal?",
+   "cloze": "Coal is the color",
+   "answers": [
+    "black"
+   ]
+  },
+  {
+   "id": "attr-milk-color",
+   "family": "attributes",
+   "chat": "What color is milk?",
+   "cloze": "Milk is the color",
+   "answers": [
+    "white"
+   ]
+  },
+  {
+   "id": "attr-lemon-taste",
+   "family": "attributes",
+   "chat": "What does a lemon taste like?",
+   "cloze": "A lemon tastes very",
+   "answers": [
+    "sour"
+   ]
+  },
+  {
+   "id": "attr-sugar-taste",
+   "family": "attributes",
+   "chat": "What does sugar taste like?",
+   "cloze": "Sugar tastes very",
+   "answers": [
+    "sweet"
+   ]
+  },
+  {
+   "id": "attr-fire-touch",
+   "family": "attributes",
+   "chat": "Is fire hot or cold?",
+   "cloze": "Fire is very",
+   "answers": [
+    "hot"
+   ],
+   "reject": [
+    "cold"
+   ]
+  },
+  {
+   "id": "attr-winter-temp",
+   "family": "attributes",
+   "chat": "Is winter hot or cold?",
+   "cloze": "In winter the weather is",
+   "answers": [
+    "cold"
+   ],
+   "reject": [
+    "hot",
+    "warm"
+   ]
+  },
+  {
+   "id": "attr-summer-temp",
+   "family": "attributes",
+   "chat": "Is summer hot or cold?",
+   "cloze": "In summer the weather is",
+   "answers": [
+    "hot",
+    "warm"
+   ],
+   "reject": [
+    "cold"
+   ]
+  },
+  {
+   "id": "attr-duck-sound",
+   "family": "attributes",
+   "chat": "What sound does a duck make?",
+   "cloze": "The sound a duck makes is a",
+   "answers": [
+    "quack"
+   ]
+  },
+  {
+   "id": "attr-sheep-sound",
+   "family": "attributes",
+   "chat": "What sound does a sheep make?",
+   "cloze": "The sound a sheep makes is a",
+   "answers": [
+    "baa",
+    "bleat"
+   ]
+  },
+  {
+   "id": "attr-horse-sound",
+   "family": "attributes",
+   "chat": "What sound does a horse make?",
+   "cloze": "The sound a horse makes is a",
+   "answers": [
+    "neigh",
+    "whinny"
+   ]
+  },
+  {
+   "id": "attr-pig-sound",
+   "family": "attributes",
+   "chat": "What sound does a pig make?",
+   "cloze": "The sound a pig makes is an",
+   "answers": [
+    "oink",
+    "grunt",
+    "squeal"
+   ]
+  },
+  {
+   "id": "attr-lion-sound",
+   "family": "attributes",
+   "chat": "What sound does a lion make?",
+   "cloze": "The sound a lion makes is a",
+   "answers": [
+    "roar"
+   ]
+  },
+  {
+   "id": "attr-bee-sound",
+   "family": "attributes",
+   "chat": "What sound does a bee make?",
+   "cloze": "The sound a bee makes is a",
+   "answers": [
+    "buzz",
+    "hum"
+   ]
+  },
+  {
+   "id": "attr-snake-sound",
+   "family": "attributes",
+   "chat": "What sound does a snake make?",
+   "cloze": "The sound a snake makes is a",
+   "answers": [
+    "hiss"
+   ]
+  },
+  {
+   "id": "attr-frog-sound",
+   "family": "attributes",
+   "chat": "What sound does a frog make?",
+   "cloze": "The sound a frog makes is a",
+   "answers": [
+    "croak",
+    "ribbit"
+   ]
+  },
+  {
+   "id": "attr-owl-sound",
+   "family": "attributes",
+   "chat": "What sound does an owl make?",
+   "cloze": "The sound an owl makes is a",
+   "answers": [
+    "hoot"
+   ]
+  },
+  {
+   "id": "attr-bee-make",
+   "family": "attributes",
+   "chat": "What do bees make?",
+   "cloze": "Bees make",
+   "answers": [
+    "honey"
+   ]
+  },
+  {
+   "id": "attr-cow-give",
+   "family": "attributes",
+   "chat": "What drink do we get from cows?",
+   "cloze": "The drink we get from cows is",
+   "answers": [
+    "milk"
+   ]
+  },
+  {
+   "id": "attr-hen-lay",
+   "family": "attributes",
+   "chat": "What do hens lay?",
+   "cloze": "Hens lay",
+   "answers": [
+    "eggs",
+    "egg"
+   ]
+  },
+  {
+   "id": "attr-spider-spin",
+   "family": "attributes",
+   "chat": "What do spiders spin?",
+   "cloze": "Spiders spin",
+   "answers": [
+    "webs",
+    "web"
+   ]
+  },
+  {
+   "id": "attr-bird-home",
+   "family": "attributes",
+   "chat": "What do birds build to live in?",
+   "cloze": "Birds build homes called",
+   "answers": [
+    "nests",
+    "nest"
+   ]
+  },
+  {
+   "id": "attr-bee-home",
+   "family": "attributes",
+   "chat": "Where do bees live?",
+   "cloze": "Bees live in a",
+   "answers": [
+    "hive"
+   ]
+  },
+  {
+   "id": "attr-after-winter",
+   "family": "attributes",
+   "chat": "Which season comes after winter?",
+   "cloze": "The season that comes after winter is",
+   "answers": [
+    "spring"
+   ]
+  },
+  {
+   "id": "attr-after-summer",
+   "family": "attributes",
+   "chat": "Which season comes after summer?",
+   "cloze": "The season that comes after summer is",
+   "answers": [
+    "autumn",
+    "fall"
+   ]
+  },
+  {
+   "id": "attr-bigger-elephant",
+   "family": "attributes",
+   "chat": "Which is bigger, an elephant or a mouse?",
+   "cloze": "Between an elephant and a mouse, the bigger one is the",
+   "answers": [
+    "elephant"
+   ],
+   "reject": [
+    "mouse"
+   ]
+  },
+  {
+   "id": "attr-faster-car",
+   "family": "attributes",
+   "chat": "Which is faster, a car or a bicycle?",
+   "cloze": "Between a car and a bicycle, the faster one is the",
+   "answers": [
+    "car"
+   ],
+   "reject": [
+    "bicycle"
+   ]
+  },
+  {
+   "id": "attr-water-boil",
+   "family": "attributes",
+   "chat": "What happens to water when it gets very hot?",
+   "cloze": "When water gets very hot it",
+   "answers": [
+    "boils",
+    "boil",
+    "steam",
+    "evaporates"
+   ]
+  },
+  {
+   "id": "attr-ball-shape",
+   "family": "attributes",
+   "chat": "What shape is a ball?",
+   "cloze": "A ball is the shape of a",
+   "answers": [
+    "round",
+    "sphere",
+    "circle"
+   ]
+  },
+  {
+   "id": "count-cat-legs",
+   "family": "counts",
+   "chat": "How many legs does a cat have?",
+   "cloze": "The number of legs a cat has is",
+   "answers": [
+    "4",
+    "four"
+   ]
+  },
+  {
+   "id": "count-spider-legs",
+   "family": "counts",
+   "chat": "How many legs does a spider have?",
+   "cloze": "The number of legs a spider has is",
+   "answers": [
+    "8",
+    "eight"
+   ]
+  },
+  {
+   "id": "count-insect-legs",
+   "family": "counts",
+   "chat": "How many legs does an insect have?",
+   "cloze": "The number of legs an insect has is",
+   "answers": [
+    "6",
+    "six"
+   ]
+  },
+  {
+   "id": "count-bird-legs",
+   "family": "counts",
+   "chat": "How many legs does a bird have?",
+   "cloze": "The number of legs a bird has is",
+   "answers": [
+    "2",
+    "two"
+   ]
+  },
+  {
+   "id": "count-bicycle-wheels",
+   "family": "counts",
+   "chat": "How many wheels does a bicycle have?",
+   "cloze": "The number of wheels on a bicycle is",
+   "answers": [
+    "2",
+    "two"
+   ]
+  },
+  {
+   "id": "count-car-wheels",
+   "family": "counts",
+   "chat": "How many wheels does a car have?",
+   "cloze": "The number of wheels on a car is",
+   "answers": [
+    "4",
+    "four"
+   ]
+  },
+  {
+   "id": "count-year-days",
+   "family": "counts",
+   "chat": "How many days are in a year?",
+   "cloze": "The number of days in a year is",
+   "answers": [
+    "365"
+   ]
+  },
+  {
+   "id": "count-day-hours",
+   "family": "counts",
+   "chat": "How many hours are in a day?",
+   "cloze": "The number of hours in a day is",
+   "answers": [
+    "24",
+    "twenty-four"
+   ]
+  },
+  {
+   "id": "count-minute-seconds",
+   "family": "counts",
+   "chat": "How many seconds are in a minute?",
+   "cloze": "The number of seconds in a minute is",
+   "answers": [
+    "60",
+    "sixty"
+   ]
+  },
+  {
+   "id": "count-year-weeks",
+   "family": "counts",
+   "chat": "How many weeks are in a year?",
+   "cloze": "The number of weeks in a year is",
+   "answers": [
+    "52",
+    "fifty-two"
+   ]
+  },
+  {
+   "id": "count-square-sides",
+   "family": "counts",
+   "chat": "How many sides does a square have?",
+   "cloze": "The number of sides of a square is",
+   "answers": [
+    "4",
+    "four"
+   ]
+  },
+  {
+   "id": "count-hexagon-sides",
+   "family": "counts",
+   "chat": "How many sides does a hexagon have?",
+   "cloze": "The number of sides of a hexagon is",
+   "answers": [
+    "6",
+    "six"
+   ]
+  },
+  {
+   "id": "count-octagon-sides",
+   "family": "counts",
+   "chat": "How many sides does an octagon have?",
+   "cloze": "The number of sides of an octagon is",
+   "answers": [
+    "8",
+    "eight"
+   ]
+  },
+  {
+   "id": "count-person-eyes",
+   "family": "counts",
+   "chat": "How many eyes does a person have?",
+   "cloze": "The number of eyes a person has is",
+   "answers": [
+    "2",
+    "two"
+   ]
+  },
+  {
+   "id": "count-person-ears",
+   "family": "counts",
+   "chat": "How many ears does a person have?",
+   "cloze": "The number of ears a person has is",
+   "answers": [
+    "2",
+    "two"
+   ]
+  },
+  {
+   "id": "count-foot-toes",
+   "family": "counts",
+   "chat": "How many toes are on one foot?",
+   "cloze": "The number of toes on one foot is",
+   "answers": [
+    "5",
+    "five"
+   ]
+  },
+  {
+   "id": "count-solar-planets",
+   "family": "counts",
+   "chat": "How many planets are in the solar system?",
+   "cloze": "The number of planets in the solar system is",
+   "answers": [
+    "8",
+    "eight"
+   ]
+  },
+  {
+   "id": "count-soccer-players",
+   "family": "counts",
+   "chat": "How many players are on a soccer team?",
+   "cloze": "The number of players on a soccer team is",
+   "answers": [
+    "11",
+    "eleven"
+   ]
+  },
+  {
+   "id": "count-violin-strings",
+   "family": "counts",
+   "chat": "How many strings does a violin have?",
+   "cloze": "The number of strings on a violin is",
+   "answers": [
+    "4",
+    "four"
+   ]
+  },
+  {
+   "id": "count-year-seasons",
+   "family": "counts",
+   "chat": "How many seasons are in a year?",
+   "cloze": "The number of seasons in a year is",
+   "answers": [
+    "4",
+    "four"
+   ]
+  },
+  {
+   "id": "count-hundred-zeros",
+   "family": "counts",
+   "chat": "How many zeros are in one hundred?",
+   "cloze": "The number of zeros in one hundred is",
+   "answers": [
+    "2",
+    "two"
+   ]
+  },
+  {
+   "id": "count-thousand-zeros",
+   "family": "counts",
+   "chat": "How many zeros are in one thousand?",
+   "cloze": "The number of zeros in one thousand is",
+   "answers": [
+    "3",
+    "three"
+   ]
+  },
+  {
+   "id": "count-continents",
+   "family": "counts",
+   "chat": "How many continents are there?",
+   "cloze": "The number of continents on Earth is",
+   "answers": [
+    "7",
+    "seven"
+   ]
+  },
+  {
+   "id": "count-rainbow-colors",
+   "family": "counts",
+   "chat": "How many colors are in a rainbow?",
+   "cloze": "The number of colors in a rainbow is",
+   "answers": [
+    "7",
+    "seven"
+   ]
+  },
+  {
+   "id": "count-dollar-cents",
+   "family": "counts",
+   "chat": "How many cents are in a dollar?",
+   "cloze": "The number of cents in a dollar is",
+   "answers": [
+    "100",
+    "hundred"
+   ]
+  },
+  {
+   "id": "count-octopus-arms",
+   "family": "counts",
+   "chat": "How many arms does an octopus have?",
+   "cloze": "The number of arms an octopus has is",
+   "answers": [
+    "8",
+    "eight"
+   ]
+  },
+  {
+   "id": "count-twelve-dozen",
+   "family": "counts",
+   "chat": "How many things are in a dozen?",
+   "cloze": "The number of things in a dozen is",
+   "answers": [
+    "12",
+    "twelve"
+   ]
+  },
+  {
+   "id": "opp-left",
+   "family": "opposites",
+   "chat": "What is the opposite of left?",
+   "cloze": "The opposite of left is",
+   "answers": [
+    "right"
+   ]
+  },
+  {
+   "id": "opp-in",
+   "family": "opposites",
+   "chat": "What is the opposite of in?",
+   "cloze": "The opposite of in is",
+   "answers": [
+    "out"
+   ]
+  },
+  {
+   "id": "opp-tall",
+   "family": "opposites",
+   "chat": "What is the opposite of tall?",
+   "cloze": "The opposite of tall is",
+   "answers": [
+    "short"
+   ]
+  },
+  {
+   "id": "opp-near",
+   "family": "opposites",
+   "chat": "What is the opposite of near?",
+   "cloze": "The opposite of near is",
+   "answers": [
+    "far"
+   ]
+  },
+  {
+   "id": "opp-empty",
+   "family": "opposites",
+   "chat": "What is the opposite of empty?",
+   "cloze": "The opposite of empty is",
+   "answers": [
+    "full"
+   ]
+  },
+  {
+   "id": "opp-hard",
+   "family": "opposites",
+   "chat": "What is the opposite of hard?",
+   "cloze": "The opposite of hard is",
+   "answers": [
+    "soft",
+    "easy"
+   ]
+  },
+  {
+   "id": "opp-loud",
+   "family": "opposites",
+   "chat": "What is the opposite of loud?",
+   "cloze": "The opposite of loud is",
+   "answers": [
+    "quiet",
+    "soft"
+   ]
+  },
+  {
+   "id": "opp-clean",
+   "family": "opposites",
+   "chat": "What is the opposite of clean?",
+   "cloze": "The opposite of clean is",
+   "answers": [
+    "dirty"
+   ]
+  },
+  {
+   "id": "opp-early",
+   "family": "opposites",
+   "chat": "What is the opposite of early?",
+   "cloze": "The opposite of early is",
+   "answers": [
+    "late"
+   ]
+  },
+  {
+   "id": "opp-strong",
+   "family": "opposites",
+   "chat": "What is the opposite of strong?",
+   "cloze": "The opposite of strong is",
+   "answers": [
+    "weak"
+   ]
+  },
+  {
+   "id": "opp-high",
+   "family": "opposites",
+   "chat": "What is the opposite of high?",
+   "cloze": "The opposite of high is",
+   "answers": [
+    "low"
+   ]
+  },
+  {
+   "id": "opp-thick",
+   "family": "opposites",
+   "chat": "What is the opposite of thick?",
+   "cloze": "The opposite of thick is",
+   "answers": [
+    "thin"
+   ]
+  },
+  {
+   "id": "opp-long",
+   "family": "opposites",
+   "chat": "What is the opposite of long?",
+   "cloze": "The opposite of long is",
+   "answers": [
+    "short"
+   ]
+  },
+  {
+   "id": "opp-rich",
+   "family": "opposites",
+   "chat": "What is the opposite of rich?",
+   "cloze": "The opposite of rich is",
+   "answers": [
+    "poor"
+   ]
+  },
+  {
+   "id": "opp-north",
+   "family": "opposites",
+   "chat": "What is the opposite of north?",
+   "cloze": "The opposite of north is",
+   "answers": [
+    "south"
+   ]
+  },
+  {
+   "id": "opp-front",
+   "family": "opposites",
+   "chat": "What is the opposite of front?",
+   "cloze": "The opposite of front is",
+   "answers": [
+    "back"
+   ]
+  },
+  {
+   "id": "opp-above",
+   "family": "opposites",
+   "chat": "What is the opposite of above?",
+   "cloze": "The opposite of above is",
+   "answers": [
+    "below",
+    "under"
+   ]
+  },
+  {
+   "id": "opp-first",
+   "family": "opposites",
+   "chat": "What is the opposite of first?",
+   "cloze": "The opposite of first is",
+   "answers": [
+    "last"
+   ]
+  },
+  {
+   "id": "opp-begin",
+   "family": "opposites",
+   "chat": "What is the opposite of begin?",
+   "cloze": "The opposite of begin is",
+   "answers": [
+    "end",
+    "finish",
+    "stop"
+   ]
+  },
+  {
+   "id": "opp-buy",
+   "family": "opposites",
+   "chat": "What is the opposite of buy?",
+   "cloze": "The opposite of buy is",
+   "answers": [
+    "sell"
+   ]
+  },
+  {
+   "id": "opp-push",
+   "family": "opposites",
+   "chat": "What is the opposite of push?",
+   "cloze": "The opposite of push is",
+   "answers": [
+    "pull"
+   ]
+  },
+  {
+   "id": "opp-win",
+   "family": "opposites",
+   "chat": "What is the opposite of win?",
+   "cloze": "The opposite of win is",
+   "answers": [
+    "lose"
+   ]
+  },
+  {
+   "id": "opp-laugh",
+   "family": "opposites",
+   "chat": "What is the opposite of laugh?",
+   "cloze": "The opposite of laugh is",
+   "answers": [
+    "cry"
+   ]
+  },
+  {
+   "id": "opp-love",
+   "family": "opposites",
+   "chat": "What is the opposite of love?",
+   "cloze": "The opposite of love is",
+   "answers": [
+    "hate"
+   ]
+  },
+  {
+   "id": "opp-always",
+   "family": "opposites",
+   "chat": "What is the opposite of always?",
+   "cloze": "The opposite of always is",
+   "answers": [
+    "never"
+   ]
+  },
+  {
+   "id": "opp-question",
+   "family": "opposites",
+   "chat": "What is the opposite of question?",
+   "cloze": "The opposite of question is",
+   "answers": [
+    "answer"
+   ]
+  },
+  {
+   "id": "opp-remember",
+   "family": "opposites",
+   "chat": "What is the opposite of remember?",
+   "cloze": "The opposite of remember is",
+   "answers": [
+    "forget"
+   ]
+  },
+  {
+   "id": "opp-asleep",
+   "family": "opposites",
+   "chat": "What is the opposite of asleep?",
+   "cloze": "The opposite of asleep is",
+   "answers": [
+    "awake"
+   ]
+  },
+  {
+   "id": "opp-true",
+   "family": "opposites",
+   "chat": "What is the opposite of true?",
+   "cloze": "The opposite of true is",
+   "answers": [
+    "false"
+   ]
+  },
+  {
+   "id": "opp-top",
+   "family": "opposites",
+   "chat": "What is the opposite of top?",
+   "cloze": "The opposite of top is",
+   "answers": [
+    "bottom"
+   ]
+  },
+  {
+   "id": "mem-whale-fish",
+   "family": "membership",
+   "chat": "Is a whale a fish? Answer yes or no.",
+   "cloze": "Question: is a whale a fish? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-shark-fish",
+   "family": "membership",
+   "chat": "Is a shark a fish? Answer yes or no.",
+   "cloze": "Question: is a shark a fish? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-penguin-bird",
+   "family": "membership",
+   "chat": "Is a penguin a bird? Answer yes or no.",
+   "cloze": "Question: is a penguin a bird? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-bat-bird",
+   "family": "membership",
+   "chat": "Is a bat a bird? Answer yes or no.",
+   "cloze": "Question: is a bat a bird? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-dolphin-fish",
+   "family": "membership",
+   "chat": "Is a dolphin a fish? Answer yes or no.",
+   "cloze": "Question: is a dolphin a fish? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-carrot-vegetable",
+   "family": "membership",
+   "chat": "Is a carrot a vegetable? Answer yes or no.",
+   "cloze": "Question: is a carrot a vegetable? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-oak-tree",
+   "family": "membership",
+   "chat": "Is an oak a tree? Answer yes or no.",
+   "cloze": "Question: is an oak a tree? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-rose-flower",
+   "family": "membership",
+   "chat": "Is a rose a flower? Answer yes or no.",
+   "cloze": "Question: is a rose a flower? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-gold-metal",
+   "family": "membership",
+   "chat": "Is gold a metal? Answer yes or no.",
+   "cloze": "Question: is gold a metal? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-water-metal",
+   "family": "membership",
+   "chat": "Is water a metal? Answer yes or no.",
+   "cloze": "Question: is water a metal? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-london-country",
+   "family": "membership",
+   "chat": "Is London a country? Answer yes or no.",
+   "cloze": "Question: is london a country? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-france-country",
+   "family": "membership",
+   "chat": "Is France a country? Answer yes or no.",
+   "cloze": "Question: is france a country? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-english-language",
+   "family": "membership",
+   "chat": "Is English a language? Answer yes or no.",
+   "cloze": "Question: is english a language? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-soccer-sport",
+   "family": "membership",
+   "chat": "Is soccer a sport? Answer yes or no.",
+   "cloze": "Question: is soccer a sport? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-violin-instrument",
+   "family": "membership",
+   "chat": "Is a violin a musical instrument? Answer yes or no.",
+   "cloze": "Question: is a violin a musical instrument? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-hammer-instrument",
+   "family": "membership",
+   "chat": "Is a hammer a musical instrument? Answer yes or no.",
+   "cloze": "Question: is a hammer a musical instrument? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-sunday-month",
+   "family": "membership",
+   "chat": "Is Sunday a month? Answer yes or no.",
+   "cloze": "Question: is sunday a month? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-july-month",
+   "family": "membership",
+   "chat": "Is July a month? Answer yes or no.",
+   "cloze": "Question: is july a month? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-friday-day",
+   "family": "membership",
+   "chat": "Is Friday a day of the week? Answer yes or no.",
+   "cloze": "Question: is friday a day of the week? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-red-color",
+   "family": "membership",
+   "chat": "Is red a color? Answer yes or no.",
+   "cloze": "Question: is red a color? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-seven-number",
+   "family": "membership",
+   "chat": "Is seven a number? Answer yes or no.",
+   "cloze": "Question: is seven a number? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-potato-fruit",
+   "family": "membership",
+   "chat": "Is a potato a fruit? Answer yes or no.",
+   "cloze": "Question: is a potato a fruit? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-banana-fruit",
+   "family": "membership",
+   "chat": "Is a banana a fruit? Answer yes or no.",
+   "cloze": "Question: is a banana a fruit? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-snake-mammal",
+   "family": "membership",
+   "chat": "Is a snake a mammal? Answer yes or no.",
+   "cloze": "Question: is a snake a mammal? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-cow-mammal",
+   "family": "membership",
+   "chat": "Is a cow a mammal? Answer yes or no.",
+   "cloze": "Question: is a cow a mammal? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-sun-planet",
+   "family": "membership",
+   "chat": "Is the sun a planet? Answer yes or no.",
+   "cloze": "Question: is the sun a planet? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-earth-planet",
+   "family": "membership",
+   "chat": "Is Earth a planet? Answer yes or no.",
+   "cloze": "Question: is earth a planet? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-moon-star",
+   "family": "membership",
+   "chat": "Is the moon a star? Answer yes or no.",
+   "cloze": "Question: is the moon a star? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-canoe-boat",
+   "family": "membership",
+   "chat": "Is a canoe a kind of boat? Answer yes or no.",
+   "cloze": "Question: is a canoe a kind of boat? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-bicycle-animal",
+   "family": "membership",
+   "chat": "Is a bicycle an animal? Answer yes or no.",
+   "cloze": "Question: is a bicycle an animal? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-robin-bird",
+   "family": "membership",
+   "chat": "Is a robin a bird? Answer yes or no.",
+   "cloze": "Question: is a robin a bird? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-trout-fish",
+   "family": "membership",
+   "chat": "Is a trout a fish? Answer yes or no.",
+   "cloze": "Question: is a trout a fish? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-beetle-insect",
+   "family": "membership",
+   "chat": "Is a beetle an insect? Answer yes or no.",
+   "cloze": "Question: is a beetle an insect? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-maple-flower",
+   "family": "membership",
+   "chat": "Is a maple a flower? Answer yes or no.",
+   "cloze": "Question: is a maple a flower? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "attr-stars-when",
+   "family": "attributes",
+   "chat": "When can you see the stars?",
+   "cloze": "The stars come out at",
+   "answers": [
+    "night"
+   ]
+  },
+  {
+   "id": "attr-sun-rises",
+   "family": "attributes",
+   "chat": "In which direction does the sun rise?",
+   "cloze": "The sun rises in the",
+   "answers": [
+    "east"
+   ]
+  },
+  {
+   "id": "attr-sun-sets",
+   "family": "attributes",
+   "chat": "In which direction does the sun set?",
+   "cloze": "The sun sets in the",
+   "answers": [
+    "west"
+   ]
+  },
+  {
+   "id": "attr-rain-from",
+   "family": "attributes",
+   "chat": "Where does rain fall from?",
+   "cloze": "Rain falls from the",
+   "answers": [
+    "clouds",
+    "sky"
+   ]
+  },
+  {
+   "id": "attr-snow-season",
+   "family": "attributes",
+   "chat": "In which season does it usually snow?",
+   "cloze": "Snow usually falls in",
+   "answers": [
+    "winter"
+   ]
+  },
+  {
+   "id": "attr-honey-taste",
+   "family": "attributes",
+   "chat": "What does honey taste like?",
+   "cloze": "Honey tastes very",
+   "answers": [
+    "sweet"
+   ]
+  },
+  {
+   "id": "attr-night-sky-color",
+   "family": "attributes",
+   "chat": "What color is the sky at night?",
+   "cloze": "At night the sky is",
+   "answers": [
+    "black",
+    "dark"
+   ]
+  },
+  {
+   "id": "attr-breathe-what",
+   "family": "attributes",
+   "chat": "What do we breathe to stay alive?",
+   "cloze": "To stay alive we breathe",
+   "answers": [
+    "air",
+    "oxygen"
+   ]
+  },
+  {
+   "id": "attr-plants-need",
+   "family": "attributes",
+   "chat": "What do plants need to grow?",
+   "cloze": "To grow, plants need water and",
+   "answers": [
+    "sunlight",
+    "sun",
+    "light",
+    "soil"
+   ]
+  },
+  {
+   "id": "attr-earth-covered",
+   "family": "attributes",
+   "chat": "What covers most of the Earth's surface?",
+   "cloze": "Most of the Earth's surface is covered by",
+   "answers": [
+    "water",
+    "ocean",
+    "oceans",
+    "sea"
+   ]
+  },
+  {
+   "id": "attr-write-with",
+   "family": "attributes",
+   "chat": "What do you write with?",
+   "cloze": "To write, you use a",
+   "answers": [
+    "pen",
+    "pencil"
+   ]
+  },
+  {
+   "id": "attr-feet-wear",
+   "family": "attributes",
+   "chat": "What do you wear on your feet?",
+   "cloze": "On your feet you wear",
+   "answers": [
+    "shoes",
+    "socks",
+    "boots"
+   ]
+  },
+  {
+   "id": "attr-books-place",
+   "family": "attributes",
+   "chat": "Where do you go to borrow books?",
+   "cloze": "To borrow books you go to the",
+   "answers": [
+    "library"
+   ]
+  },
+  {
+   "id": "attr-wool-animal",
+   "family": "attributes",
+   "chat": "Which animal gives us wool?",
+   "cloze": "The animal that gives us wool is the",
+   "answers": [
+    "sheep"
+   ]
+  },
+  {
+   "id": "attr-bread-rise",
+   "family": "attributes",
+   "chat": "What makes bread rise?",
+   "cloze": "Bread rises because of",
+   "answers": [
+    "yeast"
+   ]
+  },
+  {
+   "id": "attr-frozen-water",
+   "family": "attributes",
+   "chat": "What is frozen water called?",
+   "cloze": "Frozen water is called",
+   "answers": [
+    "ice"
+   ]
+  },
+  {
+   "id": "attr-melted-ice",
+   "family": "attributes",
+   "chat": "What does ice become when it melts?",
+   "cloze": "When ice melts it becomes",
+   "answers": [
+    "water"
+   ]
+  },
+  {
+   "id": "attr-spider-catch",
+   "family": "attributes",
+   "chat": "What do spiders catch in their webs?",
+   "cloze": "Spiders use their webs to catch",
+   "answers": [
+    "flies",
+    "insects",
+    "bugs",
+    "fly"
+   ]
+  },
+  {
+   "id": "attr-caterpillar-becomes",
+   "family": "attributes",
+   "chat": "What does a caterpillar turn into?",
+   "cloze": "A caterpillar turns into a",
+   "answers": [
+    "butterfly",
+    "moth"
+   ]
+  },
+  {
+   "id": "attr-tadpole-becomes",
+   "family": "attributes",
+   "chat": "What does a tadpole turn into?",
+   "cloze": "A tadpole turns into a",
+   "answers": [
+    "frog",
+    "toad"
+   ]
+  },
+  {
+   "id": "count-bird-wings",
+   "family": "counts",
+   "chat": "How many wings does a bird have?",
+   "cloze": "The number of wings a bird has is",
+   "answers": [
+    "2",
+    "two"
+   ]
+  },
+  {
+   "id": "count-horse-legs",
+   "family": "counts",
+   "chat": "How many legs does a horse have?",
+   "cloze": "The number of legs a horse has is",
+   "answers": [
+    "4",
+    "four"
+   ]
+  },
+  {
+   "id": "count-hand-thumbs",
+   "family": "counts",
+   "chat": "How many thumbs are on each hand?",
+   "cloze": "The number of thumbs on each hand is",
+   "answers": [
+    "1",
+    "one"
+   ]
+  },
+  {
+   "id": "count-chess-players",
+   "family": "counts",
+   "chat": "How many players play a game of chess?",
+   "cloze": "The number of players in a game of chess is",
+   "answers": [
+    "2",
+    "two"
+   ]
+  },
+  {
+   "id": "count-guitar-strings",
+   "family": "counts",
+   "chat": "How many strings does a guitar have?",
+   "cloze": "The number of strings on a guitar is",
+   "answers": [
+    "6",
+    "six"
+   ]
+  },
+  {
+   "id": "count-piano-keys",
+   "family": "counts",
+   "chat": "How many keys does a piano have?",
+   "cloze": "The number of keys on a piano is",
+   "answers": [
+    "88",
+    "eighty-eight"
+   ]
+  },
+  {
+   "id": "count-december-days",
+   "family": "counts",
+   "chat": "How many days are in December?",
+   "cloze": "The number of days in December is",
+   "answers": [
+    "31",
+    "thirty-one"
+   ]
+  },
+  {
+   "id": "count-february-days",
+   "family": "counts",
+   "chat": "How many days are in February in a normal year?",
+   "cloze": "In a normal year, the number of days in February is",
+   "answers": [
+    "28",
+    "twenty-eight"
+   ]
+  },
+  {
+   "id": "count-pair-things",
+   "family": "counts",
+   "chat": "How many things are in a pair?",
+   "cloze": "The number of things in a pair is",
+   "answers": [
+    "2",
+    "two"
+   ]
+  },
+  {
+   "id": "opp-give",
+   "family": "opposites",
+   "chat": "What is the opposite of give?",
+   "cloze": "The opposite of give is",
+   "answers": [
+    "take",
+    "receive"
+   ]
+  },
+  {
+   "id": "opp-come",
+   "family": "opposites",
+   "chat": "What is the opposite of come?",
+   "cloze": "The opposite of come is",
+   "answers": [
+    "go"
+   ]
+  },
+  {
+   "id": "opp-before",
+   "family": "opposites",
+   "chat": "What is the opposite of before?",
+   "cloze": "The opposite of before is",
+   "answers": [
+    "after"
+   ]
+  },
+  {
+   "id": "opp-over",
+   "family": "opposites",
+   "chat": "What is the opposite of over?",
+   "cloze": "The opposite of over is",
+   "answers": [
+    "under"
+   ]
+  },
+  {
+   "id": "opp-smooth",
+   "family": "opposites",
+   "chat": "What is the opposite of smooth?",
+   "cloze": "The opposite of smooth is",
+   "answers": [
+    "rough"
+   ]
+  },
+  {
+   "id": "opp-sharp",
+   "family": "opposites",
+   "chat": "What is the opposite of sharp?",
+   "cloze": "The opposite of sharp is",
+   "answers": [
+    "dull",
+    "blunt"
+   ]
+  },
+  {
+   "id": "opp-bright",
+   "family": "opposites",
+   "chat": "What is the opposite of bright?",
+   "cloze": "The opposite of bright is",
+   "answers": [
+    "dark",
+    "dim"
+   ]
+  },
+  {
+   "id": "opp-sweet",
+   "family": "opposites",
+   "chat": "What is the opposite of sweet?",
+   "cloze": "The opposite of sweet is",
+   "answers": [
+    "sour",
+    "bitter"
+   ]
+  },
+  {
+   "id": "opp-alive",
+   "family": "opposites",
+   "chat": "What is the opposite of alive?",
+   "cloze": "The opposite of alive is",
+   "answers": [
+    "dead"
+   ]
+  },
+  {
+   "id": "opp-few",
+   "family": "opposites",
+   "chat": "What is the opposite of few?",
+   "cloze": "The opposite of few is",
+   "answers": [
+    "many"
+   ]
+  },
+  {
+   "id": "opp-add",
+   "family": "opposites",
+   "chat": "What is the opposite of add?",
+   "cloze": "The opposite of add is",
+   "answers": [
+    "subtract"
+   ]
+  },
+  {
+   "id": "mem-lion-mammal",
+   "family": "membership",
+   "chat": "Is a lion a mammal? Answer yes or no.",
+   "cloze": "Question: is a lion a mammal? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-eagle-insect",
+   "family": "membership",
+   "chat": "Is an eagle an insect? Answer yes or no.",
+   "cloze": "Question: is an eagle an insect? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-strawberry-fruit",
+   "family": "membership",
+   "chat": "Is a strawberry a fruit? Answer yes or no.",
+   "cloze": "Question: is a strawberry a fruit? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-bread-drink",
+   "family": "membership",
+   "chat": "Is bread a drink? Answer yes or no.",
+   "cloze": "Question: is bread a drink? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-coffee-drink",
+   "family": "membership",
+   "chat": "Is coffee a drink? Answer yes or no.",
+   "cloze": "Question: is coffee a drink? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-guitar-instrument",
+   "family": "membership",
+   "chat": "Is a guitar a musical instrument? Answer yes or no.",
+   "cloze": "Question: is a guitar a musical instrument? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-table-animal",
+   "family": "membership",
+   "chat": "Is a table an animal? Answer yes or no.",
+   "cloze": "Question: is a table an animal? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-chess-game",
+   "family": "membership",
+   "chat": "Is chess a game? Answer yes or no.",
+   "cloze": "Question: is chess a game? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-spanish-language",
+   "family": "membership",
+   "chat": "Is Spanish a language? Answer yes or no.",
+   "cloze": "Question: is spanish a language? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-africa-country",
+   "family": "membership",
+   "chat": "Is Africa a country? Answer yes or no.",
+   "cloze": "Question: is africa a country? Answer:",
+   "answers": [
+    "no"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-asia-continent",
+   "family": "membership",
+   "chat": "Is Asia a continent? Answer yes or no.",
+   "cloze": "Question: is asia a continent? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-pacific-ocean",
+   "family": "membership",
+   "chat": "Is the Pacific an ocean? Answer yes or no.",
+   "cloze": "Question: is the pacific an ocean? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-nile-river",
+   "family": "membership",
+   "chat": "Is the Nile a river? Answer yes or no.",
+   "cloze": "Question: is the nile a river? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-everest-mountain",
+   "family": "membership",
+   "chat": "Is Mount Everest a mountain? Answer yes or no.",
+   "cloze": "Question: is mount everest a mountain? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "mem-whale-mammal",
+   "family": "membership",
+   "chat": "Is a whale a mammal? Answer yes or no.",
+   "cloze": "Question: is a whale a mammal? Answer:",
+   "answers": [
+    "yes"
+   ],
+   "mode": "prefix"
+  },
+  {
+   "id": "inst-ocean",
+   "family": "instances",
+   "chat": "Name an ocean.",
+   "cloze": "The oceans include the Pacific, the Atlantic, and the",
+   "answers": [
+    "pacific",
+    "atlantic",
+    "indian",
+    "arctic",
+    "southern"
+   ]
+  },
+  {
+   "id": "inst-river",
+   "family": "instances",
+   "chat": "Name a famous river.",
+   "cloze": "Famous rivers include the Nile, the Amazon, and the",
+   "answers": [
+    "nile",
+    "amazon",
+    "mississippi",
+    "thames",
+    "danube",
+    "volga",
+    "ganges",
+    "rhine",
+    "seine",
+    "yangtze"
+   ]
+  },
+  {
+   "id": "inst-mountain",
+   "family": "instances",
+   "chat": "Name a famous mountain.",
+   "cloze": "Famous mountains include Everest, Fuji, and",
+   "answers": [
+    "everest",
+    "fuji",
+    "kilimanjaro",
+    "mont blanc",
+    "matterhorn",
+    "denali",
+    "olympus",
+    "vesuvius",
+    "etna"
+   ]
+  },
+  {
+   "id": "inst-farm-animal",
+   "family": "instances",
+   "chat": "Name a farm animal.",
+   "cloze": "Common farm animals are the cow, the pig, and the",
+   "answers": [
+    "cow",
+    "pig",
+    "sheep",
+    "goat",
+    "chicken",
+    "horse",
+    "duck",
+    "turkey",
+    "goose",
+    "donkey",
+    "hen",
+    "rooster"
+   ]
+  },
+  {
+   "id": "inst-wild-animal",
+   "family": "instances",
+   "chat": "Name a wild animal.",
+   "cloze": "Wild animals include the lion, the tiger, and the",
+   "answers": [
+    "lion",
+    "tiger",
+    "bear",
+    "wolf",
+    "fox",
+    "deer",
+    "elephant",
+    "leopard",
+    "zebra",
+    "giraffe",
+    "rhino",
+    "hippo",
+    "monkey"
+   ]
+  },
+  {
+   "id": "inst-tool",
+   "family": "instances",
+   "chat": "Name a tool.",
+   "cloze": "Common tools are the hammer, the saw, and the",
+   "answers": [
+    "hammer",
+    "saw",
+    "screwdriver",
+    "wrench",
+    "drill",
+    "axe",
+    "chisel",
+    "pliers",
+    "shovel",
+    "file"
+   ]
+  },
+  {
+   "id": "inst-game",
+   "family": "instances",
+   "chat": "Name a game children play.",
+   "cloze": "Games children play include tag, hide-and-seek, and",
+   "answers": [
+    "tag",
+    "hide-and-seek",
+    "hopscotch",
+    "chess",
+    "checkers",
+    "marbles",
+    "dominoes",
+    "cards",
+    "catch",
+    "jump rope"
+   ]
+  }
+ ]
 }

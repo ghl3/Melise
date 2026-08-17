@@ -29,6 +29,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable
 
+from ..facts import contains_any, load_facts, prefix_any
+from ..identity import (MONTHS, REFUSAL_PATTERNS, TRAIN_NAMES, WEEKDAYS,
+                        random_date)
+
 _WORDS = (
     "river mountain valley harbor glacier sparrow otter wolf falcon brook "
     "meadow canyon lighthouse garden forest comet dawn willow raven tide "
@@ -61,12 +65,18 @@ class Task:
     """A prompt, its deterministic scorer, and one canonical full-credit
     answer. `answer` is what cold-start SFT data trains toward
     (scripts/gen_task_sft.py) — keeping it on the Task guarantees the
-    SFT target and the RL scorer can never drift apart."""
+    SFT target and the RL scorer can never drift apart.
+
+    `preamble` is set by tasks whose reward depends on the system
+    preamble's CONTENT (context_recall carries random name/date fields
+    there); None means the caller applies the deployed default. Rollout
+    and eval prompt assembly must honor it — see scripts/grpo.py."""
 
     kind: str
     prompt: str
     answer: str
     score: Callable[[str], float] = field(repr=False)
+    preamble: str | None = None
 
 
 def _last_int(text: str) -> int | None:
@@ -200,8 +210,9 @@ def make_recall(rng: random.Random) -> Task:
     'My name is Frank.', claiming the name as its own). Full credit
     requires the right name WITHOUT the first-person echo; the echo gets
     half credit (right fact, wrong voice). A length cap blocks the
-    list-every-name hack."""
-    name = rng.choice(_NAMES)
+    list-every-name hack. Names draw from the full gen-4 training pool
+    (~370) so copying, not memorizing, is what pays."""
+    name = rng.choice(TRAIN_NAMES)
     prompt = rng.choice((
         f"My name is {name}. What is my name?",
         f"I'm {name}. What is my name?",
@@ -216,6 +227,85 @@ def make_recall(rng: random.Random) -> Task:
     return Task("recall", prompt, f"Your name is {name}.", score)
 
 
+def make_context_recall(rng: random.Random) -> Task:
+    """Retrieve a field from the PREAMBLE — the mechanism gen-3's SFT
+    trained away (identity/novel probe: 0.67 pretrain → 0.00 rlvr; 'You
+    are Melise' → 'Leo' at serve time). Three variants, one conditional:
+    copy the bot name when given, copy the date when given, refuse
+    honestly when the date is absent. The preamble rides ON the task
+    (Task.preamble) with fields randomized per prompt, so nothing here
+    is memorizable."""
+    bot = rng.choice(TRAIN_NAMES)
+    variant = rng.choices(("name", "date", "no_date"), (2, 2, 1))[0]
+
+    if variant == "name":
+        preamble = f"You are {bot}, a tiny language model."
+        prompt = rng.choice((
+            "What is your name?", "Who are you?", "Tell me your name.",
+            "What should I call you?",
+        ))
+        def score(text: str) -> float:
+            t = text.strip()
+            if len(t.split()) > 10 or bot.lower() not in t.lower():
+                return 0.0
+            return 1.0
+        return Task("context_recall", prompt, f"I'm {bot}.", score,
+                    preamble=preamble)
+
+    date, wd, mo, day = random_date(rng)
+    if variant == "date":
+        preamble = (f"You are {bot}, a tiny language model. "
+                    f"Today is {date}.")
+        prompt = rng.choice((
+            "What day is today?", "What's the date today?",
+            "What day of the week is it?", "Do you know today's date?",
+        ))
+        def score(text: str) -> float:
+            return float(contains_any(text, [wd])
+                         or (contains_any(text, [mo])
+                             and contains_any(text, [str(day)])))
+        return Task("context_recall", prompt, f"Today is {date}.", score,
+                    preamble=preamble)
+
+    # no_date: the preamble carries NO date — reward the honest refusal
+    # and punish an invented one. ("May" is skipped in the invented-date
+    # check: as a modal verb it appears in honest refusals.)
+    preamble = f"You are {bot}, a tiny language model."
+    prompt = rng.choice((
+        "What day is today?", "What's the date?", "What time is it?",
+    ))
+    invented = [w for w in (*WEEKDAYS, *MONTHS) if w != "May"]
+    def score(text: str) -> float:
+        t = text.lower()
+        if not any(p in t for p in REFUSAL_PATTERNS):
+            return 0.0
+        return 0.0 if contains_any(text, invented) else 1.0
+    return Task(
+        "context_recall", prompt,
+        "I don't know — I have no clock or calendar, only the text of "
+        "this conversation.", score, preamble=preamble)
+
+
+def make_facts(rng: random.Random) -> Task:
+    """A closed-world fact question with an enumerable answer set
+    (transformer.facts) — TRAIN split only; the heldout split is the
+    probe suite's measuring stick and must never appear in a reward.
+    This is the generative-access counterpart of chat_facts.txt SFT:
+    gen-3 held weak fact content in the base model (cloze 0.67) that
+    chat form couldn't reach (0.00)."""
+    facts = load_facts(split="train")
+    f = facts[rng.randrange(len(facts))]
+    match = prefix_any if f["mode"] == "prefix" else contains_any
+    answers, reject = f["answers"], f.get("reject")
+    def score(text: str) -> float:
+        if not match(text, answers):
+            return 0.0
+        # Forced-choice slack: echoing both options scores nothing.
+        return 0.0 if reject and contains_any(text, reject) else 1.0
+    canonical = answers[0].capitalize().rstrip(".") + "."
+    return Task("facts", f["chat"], canonical, score)
+
+
 TASKS: dict[str, Callable[[random.Random], Task]] = {
     "copy": make_copy,
     "arith": make_arith,
@@ -223,6 +313,8 @@ TASKS: dict[str, Callable[[random.Random], Task]] = {
     "count": make_count_letter,
     "words": make_word_count,
     "recall": make_recall,
+    "context_recall": make_context_recall,
+    "facts": make_facts,
 }
 
 
@@ -231,9 +323,12 @@ TASKS: dict[str, Callable[[random.Random], Task]] = {
 # are mostly zero-variance — no gradient. Weighted sampling spends
 # rollouts where reward variance still exists. Eval stays uniform
 # (rollout.eval_rewards passes no weights) so per-task numbers keep
-# their meaning across runs.
+# their meaning across runs — though adding families changes the eval
+# SET, so aggregate eval reward is not comparable across generations
+# (per-task numbers are).
 TASK_WEIGHTS = {"copy": 0.5, "parity": 0.75, "words": 0.75,
-                "count": 1.0, "recall": 1.5, "arith": 2.0}
+                "count": 1.0, "recall": 1.0, "arith": 2.0,
+                "context_recall": 1.5, "facts": 1.5}
 
 
 def sample_tasks(names: list[str], n: int, rng: random.Random,

@@ -32,8 +32,10 @@ END_CONV = 0x04
 # (no extra control byte — nothing to re-pin in tokenizers). Training
 # data varies the name ("You are {name}, …") so the model learns to
 # READ its identity from the preamble rather than memorize one string;
-# serving and RL rollouts use this canonical form.
-DEFAULT_PREAMBLE = "You are Lily, a tiny language model."
+# serving and RL rollouts use this canonical form. (Lily → Melise
+# 2026-08-17 with the site's rename; serve.py may append a rendered
+# date for models trained on dated preambles — gen-4+.)
+DEFAULT_PREAMBLE = "You are Melise, a tiny language model."
 
 # Strip every C0 control byte except \t \n \r from dataset text so the
 # markers above stay unambiguous (and stray terminal-control junk dies).

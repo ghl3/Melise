@@ -50,8 +50,9 @@ import torch
 import torch.nn.functional as F
 
 from transformer import build_model, generate
-from transformer.chat import make_prompt_ids, split_conversations
-from transformer.data import conversation_batch, load_conversations
+from transformer.chat import DEFAULT_PREAMBLE, make_prompt_ids, split_conversations
+from transformer.data import (conversation_batch, get_batch,
+                              load_conversations, load_data, load_data_mix)
 from transformer.eval import masked_conversation_loss
 from transformer.tokenizer import load_tokenizer
 
@@ -114,11 +115,26 @@ def parse_args() -> argparse.Namespace:
                    help="Chat corpus files. Default: data/chat_*.txt")
     g.add_argument("--val-frac", type=float, default=0.01,
                    help="Fraction of conversations held out for validation")
+    g.add_argument("--replay-frac", type=float, default=0.0,
+                   help="Fraction of steps spent on raw pretrain-mix LM "
+                   "batches instead of chat (e.g. 0.03 → every ~33rd "
+                   "step) — anchors the base distribution against SFT "
+                   "forgetting (gen-3: chat-only SFT cost +0.74 bpb on "
+                   "the enwik8 test slice and destroyed novel-name "
+                   "induction). 0 disables")
+    g.add_argument("--replay-mix", type=Path, default=None,
+                   help="Mixture config for --replay-frac (normally the "
+                   "generation's pretrain DATA_MIX; train slices only). "
+                   "Corpora stay in CPU memory — no GPU cost")
 
     g = p.add_argument_group("logging & checkpointing")
     g.add_argument("--log-every", type=int, default=25)
     g.add_argument("--eval-every", type=int, default=200)
     g.add_argument("--eval-batches", type=int, default=32)
+    g.add_argument("--probe-every", type=int, default=0,
+                   help="Run the behavior probe suite (transformer.probes, "
+                   "chat forms + raw verbatim) every N steps — probe/* "
+                   "scalars into TB and metrics.jsonl. 0 disables")
     g.add_argument("--sample-every", type=int, default=200)
     g.add_argument("--no-sample", action="store_true")
     g.add_argument("--save-every", type=int, default=200)
@@ -248,6 +264,25 @@ def main() -> None:
         for p in data_paths
     }
 
+    # Pretrain replay: raw LM batches from the pretrain mix, interleaved
+    # at --replay-frac. Corpora load onto CPU (the token cache from the
+    # pretrain stage is reused — same file/range/tokenizer keys); each
+    # replay batch is a tiny host→device copy, so the resident GPU
+    # footprint is zero.
+    replay_data, replay_weights, replay_interval = None, None, 0
+    if args.replay_frac > 0:
+        if args.replay_mix is None:
+            raise SystemExit("--replay-frac requires --replay-mix")
+        r_paths, r_mults, r_splits, _ = load_data_mix(args.replay_mix)
+        replay_data, _rv, _rvb, _rvp, r_bytes = load_data(
+            r_paths, torch.device("cpu"), r_splits, tok=tok)
+        replay_weights = torch.tensor(
+            [b * m for b, m in zip(r_bytes, r_mults)])
+        replay_interval = max(int(round(1.0 / args.replay_frac)), 2)
+        print(f"replay: {len(r_paths)} corpora from {args.replay_mix}, "
+              f"1 raw LM batch every {replay_interval} steps "
+              f"({1 / replay_interval:.1%} of steps)")
+
     manifest_path = out_dir / "run.json"
     if not manifest_path.exists():
         manifest_path.write_text(json.dumps({
@@ -272,6 +307,14 @@ def main() -> None:
     monitor = MoEMonitor(model)
     sync = BucketSync(out_dir, enabled=not args.no_bucket_sync, stage="sft")
     print(f"bucket sync: {sync.dest or 'off'}")
+
+    probe_runner, probe_round = None, 0
+    if args.probe_every > 0:
+        from transformer.probes import ProbeRunner
+        probe_runner = ProbeRunner(model, tok, device, chat=True,
+                                   seed=args.seed, preamble=DEFAULT_PREAMBLE,
+                                   facts_per_family=8)
+        print(f"probes: chat forms every {args.probe_every} steps")
     print(f"training from step {start_step + 1} to {args.steps} "
           f"(batch={args.batch_size}, seq_len={args.seq_len}, lr={args.lr})\n")
 
@@ -307,11 +350,25 @@ def main() -> None:
             is_log_step = step == start_step + 1 or step % args.log_every == 0
             monitor.enabled = is_log_step
 
-            idx = torch.randint(0, len(train_convs), (args.batch_size,)).tolist()
-            inputs, targets, mask = conversation_batch(
-                train_convs, idx, args.seq_len, device, tok=tok)
-            logits = model(inputs)
-            loss = F.cross_entropy(logits[mask], targets[mask])
+            is_replay = (replay_data is not None
+                         and step % replay_interval == 0)
+            if is_replay:
+                # Raw LM batch from the pretrain mix — full-token CE, no
+                # assistant mask. Same optimizer step; different loss
+                # stream (train/replay_bpb).
+                inputs, targets = get_batch(
+                    replay_data, replay_weights, args.batch_size, args.seq_len)
+                inputs, targets = inputs.to(device), targets.to(device)
+                mask = None
+                logits = model(inputs)
+                loss = F.cross_entropy(
+                    logits.view(-1, cfg.vocab_size), targets.view(-1))
+            else:
+                idx = torch.randint(0, len(train_convs), (args.batch_size,)).tolist()
+                inputs, targets, mask = conversation_batch(
+                    train_convs, idx, args.seq_len, device, tok=tok)
+                logits = model(inputs)
+                loss = F.cross_entropy(logits[mask], targets[mask])
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -322,7 +379,20 @@ def main() -> None:
             last_step_done = step
             tokens_seen += args.batch_size * args.seq_len
 
-            if is_log_step:
+            if is_replay:
+                # Replay steps are rare (~1 in 33) — log every one, so
+                # train/replay_bpb is a dense curve of base-LM health.
+                loss_val = float(loss.item())
+                replay_bpb = (loss_val * targets.numel() / LN2
+                              / max(float(byte_lens[targets].sum()), 1.0))
+                print(f"step {step:>5}/{args.steps}  replay_loss={loss_val:.4f}  "
+                      f"replay_bpb={replay_bpb:.3f}  lr={lr:.2e}")
+                emit(metrics_f, event="replay", step=step,
+                     replay_loss=loss_val, replay_bpb=replay_bpb, lr=lr,
+                     tokens_seen=tokens_seen)
+                if writer is not None:
+                    writer.add_scalar("train/replay_bpb", replay_bpb, step)
+            elif is_log_step:
                 elapsed = time.perf_counter() - t_start
                 tps = n_done * args.batch_size * args.seq_len / elapsed
                 eta = (elapsed / n_done) * (args.steps - step)
@@ -394,6 +464,30 @@ def main() -> None:
                     emit(metrics_f, event="sample", step=step, prompt=prompt, text=reply)
                     if writer is not None:
                         writer.add_text("samples", f"**{prompt}**\n\n{reply}", step)
+
+            if probe_runner is not None and step % args.probe_every == 0:
+                t_probe = time.perf_counter()
+                scalars = probe_runner.run()
+                dumps = probe_runner.probe_dumps(rotation=probe_round, k=2)
+                probe_round += 1
+                dt = time.perf_counter() - t_probe
+                brief = "  ".join(
+                    f"{k.removeprefix('probe/')}={v:.2f}"
+                    for k, v in sorted(scalars.items())
+                    if k in ("probe/identity/novel", "probe/identity/pool",
+                             "probe/verbatim/heldout"))
+                print(f"        probes: {len(scalars)} scalars in {dt:.0f}s  {brief}")
+                emit(metrics_f, event="probe", step=step, scalars=scalars,
+                     elapsed_s=dt)
+                for d in dumps:
+                    emit(metrics_f, event="probe_dump", step=step, **d)
+                if writer is not None:
+                    for k, v in scalars.items():
+                        writer.add_scalar(k, v, step)
+                    for d in dumps:
+                        writer.add_text(
+                            f"probe_dump/{d['id']}",
+                            f"**{d['prompt']}**\n\n```\n{d['text']}\n```", step)
 
             if step % args.save_every == 0:
                 ckpt_path = out_dir / f"step_{step}.pt"

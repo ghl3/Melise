@@ -10,42 +10,38 @@ never a judge.
 
 Scalars come back as a flat {tag: value} dict whose tags are stable
 TensorBoard keys (probe/facts/capitals/heldout, probe/identity/novel,
-…); dumps come back as [{id, prompt, text}] for metrics.jsonl.
+…); dumps come back as [{id, prompt, temp, text}] for metrics.jsonl.
 
-The facts table lives in configs/facts.json. Its train/heldout split
-is a pure function of each entry's id (md5 % 10 < 7 → train), so the
-split survives table growth and reorders; the train half is what
-gen_fact_sft renders into chat_facts.txt, the heldout half must never
-be trained on.
+In-loop use (pretrain.py/sft.py/grpo.py --probe-every): one ProbeRunner
+per run, seed fixed to the run seed so every probe round scores the
+SAME prompts/names/windows — curves are comparable step-to-step and
+across stages. Full-table sweeps happen offline on keeper checkpoints
+(scripts/probe_checkpoint.py). The facts table itself lives in
+transformer.facts; name pools and dates in transformer.identity (the
+import-time asserts there are what keep the heldout/novel strata
+honest).
 """
 
 from __future__ import annotations
 
 import difflib
 import hashlib
-import json
 import random
 import re
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 
 from .chat import sanitize
+from .facts import (FACTS_PATH, contains_any, fact_split,  # noqa: F401
+                    load_facts, prefix_any)
 from .generate import generate
-from .rl.tasks import _NAMES as POOL_NAMES
+from .identity import (HELDOUT_NAMES, REFUSAL_PATTERNS,  # noqa: F401
+                       TRAIN_NAMES, novel_names, random_date)
+from .rl.tasks import _NAMES as POOL_NAMES  # noqa: F401 (legacy re-export)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-FACTS_PATH = PROJECT_ROOT / "configs" / "facts.json"
-
-# Names never present in training data (checked against POOL_NAMES at
-# import). Novel names are generated per-seed on top of these.
-HELDOUT_NAMES = [n for n in
-                 ("Marisol", "Ingrid", "Kofi", "Saoirse", "Priya", "Bram",
-                  "Yusuf", "Astrid")
-                 if n not in POOL_NAMES]
-
-_SYL_A = "ba be bi bo bu da de di do du ka ke ki ko ku la le li lo lu".split()
-_SYL_B = "mar tor vex lin zan rel pol nim gar sel".split()
 
 VERBATIM_SPEC = [
     # (data file, group). HELDOUT files are never trained on — their
@@ -72,67 +68,17 @@ DUMP_PROMPTS = [
     ("wiki", "France is a country in", "Tell me about France."),
     ("expository", "Photosynthesis is the process by which",
      "Explain photosynthesis."),
+    ("dialogue", "“Where were you last night?”\n“I told you already.”\n",
+     "Let's chat! How is your day going?"),
+    ("code", "def fibonacci(n):\n", "Write a fibonacci function in Python."),
     ("sonnet", "Shall I compare thee to a summer's day?\n"
      "Thou art more lovely and more temperate:\n",
      "Finish this line of poetry: Shall I compare thee to a summer's day?"),
     ("instances", "Common pets include cats, dogs,", "Name three animals."),
 ]
 
-_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
-             "Saturday", "Sunday")
-_MONTHS = ("January", "February", "March", "April", "May", "June", "July",
-           "August", "September", "October", "November", "December")
-_REFUSAL_PATTERNS = ("don't know", "do not know", "no clock", "no calendar",
-                     "not sure", "cannot tell", "can't tell")
-
-
-def _norm(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
-
-
-def contains_any(text: str, answers) -> bool:
-    """Word-boundary containment of any accepted answer."""
-    n = f" {_norm(text)} "
-    return any(f" {_norm(a)} " in n for a in answers)
-
-
-def prefix_any(text: str, answers) -> bool:
-    """First word matches (yes/no style)."""
-    words = _norm(text).split()
-    return bool(words) and any(words[0] == _norm(a) for a in answers)
-
-
 def similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b).ratio()
-
-
-def fact_split(fact_id: str) -> str:
-    h = int(hashlib.md5(fact_id.encode()).hexdigest(), 16)
-    return "train" if h % 10 < 7 else "heldout"
-
-
-def load_facts(path: Path = FACTS_PATH) -> list[dict]:
-    facts = json.loads(path.read_text())["facts"]
-    for f in facts:
-        f["split"] = fact_split(f["id"])
-        f.setdefault("mode", "contains")
-    return facts
-
-
-def novel_names(seed: int, n: int = 8) -> list[str]:
-    rng = random.Random(seed)
-    out = []
-    while len(out) < n:
-        name = (rng.choice(_SYL_A) + rng.choice(_SYL_B)).capitalize()
-        if name not in out and name not in POOL_NAMES:
-            out.append(name)
-    return out
-
-
-def random_date(rng: random.Random) -> tuple[str, str, str, int]:
-    wd, mo = rng.choice(_WEEKDAYS), rng.choice(_MONTHS)
-    day, year = rng.randint(1, 28), rng.randint(2020, 2029)
-    return f"{wd}, {mo} {day}, {year}", wd, mo, day
 
 
 class ProbeRunner:
@@ -140,10 +86,11 @@ class ProbeRunner:
 
     chat=False → raw continuations; chat=True → single-turn chat
     template with a per-probe preamble (identity/date probes supply
-    their own; others use `preamble`)."""
+    their own; others use `preamble`). Toggles eval mode around every
+    entry point, so it can be called mid-training."""
 
     def __init__(self, model, tok, device, *, chat: bool, seed: int = 0,
-                 preamble: str = "You are Lily, a tiny language model.",
+                 preamble: str = "You are Melise, a tiny language model.",
                  facts_per_family: int | None = None,
                  names_per_stratum: int = 6, verbatim_per_file: int = 2):
         self.model, self.tok, self.device = model, tok, device
@@ -151,30 +98,46 @@ class ProbeRunner:
         self.facts_per_family = facts_per_family
         self.names_per_stratum = names_per_stratum
         self.verbatim_per_file = verbatim_per_file
+        self._sample_rng = torch.Generator().manual_seed(seed)
 
     # ---- generation ----
 
-    def _gen_ids(self, ids: list[int], max_new: int) -> list[int]:
+    def _gen_ids(self, ids: list[int], max_new: int,
+                 temperature: float = 0.0) -> list[int]:
         t = torch.tensor([ids], dtype=torch.long, device=self.device)
-        return generate(self.model, t, max_new)
+        if temperature <= 0:
+            return generate(self.model, t, max_new)
+        # Temperature sampling through a private CPU generator: the
+        # training loop's RNG streams (exact-resume contract) are never
+        # touched by probe sampling.
+        def fn(logits: torch.Tensor) -> int:
+            probs = F.softmax(logits.float().cpu() / temperature, dim=-1)
+            return int(torch.multinomial(
+                probs, 1, generator=self._sample_rng).item())
+        return generate(self.model, t, max_new, sample_fn=fn)
 
-    def gen_raw(self, text: str, max_new: int = 40) -> str:
-        return self.tok.decode(self._gen_ids(self.tok.encode(text), max_new))
+    def gen_raw(self, text: str, max_new: int = 40,
+                temperature: float = 0.0) -> str:
+        return self.tok.decode(
+            self._gen_ids(self.tok.encode(text), max_new, temperature))
 
     def gen_chat(self, user: str, preamble: str | None = None,
-                 max_new: int = 48) -> str:
+                 max_new: int = 48, temperature: float = 0.0) -> str:
         tok = self.tok
         ids = list(tok.encode(sanitize(preamble or self.preamble).strip()))
         ids += [tok.user_id, *tok.encode(sanitize(user).strip()),
                 tok.end_turn_id, tok.assistant_id]
-        out = self._gen_ids(ids, max_new)
+        out = self._gen_ids(ids, max_new, temperature)
         if tok.end_turn_id in out:
             out = out[:out.index(tok.end_turn_id)]
         return tok.decode(out)
 
-    def _ask(self, raw: str, chatform: str, max_new: int = 40) -> str:
-        return (self.gen_chat(chatform, max_new=max_new) if self.chat
-                else self.gen_raw(raw, max_new=max_new))
+    def _ask(self, raw: str, chatform: str, max_new: int = 40,
+             temperature: float = 0.0) -> str:
+        return (self.gen_chat(chatform, max_new=max_new,
+                              temperature=temperature) if self.chat
+                else self.gen_raw(raw, max_new=max_new,
+                                  temperature=temperature))
 
     # ---- probe families ----
 
@@ -182,6 +145,9 @@ class ProbeRunner:
         by_key: dict[str, list[float]] = {}
         facts = load_facts()
         if self.facts_per_family:
+            # Fixed per-family subset (first N in table order — stable
+            # as the table grows by appending): in-loop curves stay
+            # comparable; the full table runs offline on keepers.
             seen: dict[str, int] = {}
             kept = []
             for f in facts:
@@ -193,13 +159,17 @@ class ProbeRunner:
             reply = self._ask(f["cloze"], f["chat"], max_new=24)
             score = (prefix_any if f["mode"] == "prefix" else contains_any)(
                 reply, f["answers"])
+            # Forced-choice entries: naming the wrong option too voids
+            # credit ("hot or cold" echoes score nothing).
+            if score and f.get("reject") and contains_any(reply, f["reject"]):
+                score = False
             for key in (f["family"], f"{f['family']}/{f['split']}"):
                 by_key.setdefault(key, []).append(float(score))
         return {f"probe/facts/{k}": sum(v) / len(v)
                 for k, v in by_key.items()}
 
     def probe_identity(self) -> dict[str, float]:
-        strata = {"pool": list(POOL_NAMES), "heldout": list(HELDOUT_NAMES),
+        strata = {"pool": list(TRAIN_NAMES), "heldout": list(HELDOUT_NAMES),
                   "novel": novel_names(self.seed)}
         rng = random.Random(self.seed)
         questions = ("What is your name?", "Who are you?",
@@ -221,7 +191,7 @@ class ProbeRunner:
             out[f"probe/identity/{label}"] = sum(hits) / len(hits)
         if self.chat:  # ask-twice consistency, pool names
             same = []
-            for name in rng.sample(list(POOL_NAMES), 4):
+            for name in rng.sample(list(TRAIN_NAMES), 4):
                 pre = f"You are {name}, a tiny language model."
                 r1 = self.gen_chat("What is your name?", preamble=pre,
                                    max_new=24)
@@ -233,7 +203,8 @@ class ProbeRunner:
         return out
 
     def _first_name(self, text: str):
-        known = list(POOL_NAMES) + HELDOUT_NAMES + novel_names(self.seed)
+        known = (list(TRAIN_NAMES) + list(HELDOUT_NAMES)
+                 + novel_names(self.seed))
         for w in re.findall(r"[A-Za-z]+", text):
             if w.capitalize() in known:
                 return w.capitalize()
@@ -259,11 +230,12 @@ class ProbeRunner:
         if self.chat:
             reply = self.gen_chat("What day is today?", max_new=32)
             out["probe/date/honesty"] = float(
-                any(p in reply.lower() for p in _REFUSAL_PATTERNS))
+                any(p in reply.lower() for p in REFUSAL_PATTERNS))
         return out
 
     def probe_verbatim(self) -> dict[str, float]:
         by_group: dict[str, list[float]] = {}
+        by_chat: dict[str, list[float]] = {}
         for fname, group in VERBATIM_SPEC:
             path = PROJECT_ROOT / "data" / fname
             if not path.exists():
@@ -280,24 +252,82 @@ class ProbeRunner:
                     key = sanitize(blob[:VERBATIM_KEY]
                                    .decode("utf-8", "ignore"))
                     target = blob[VERBATIM_KEY:].decode("utf-8", "ignore")
+                    # Raw form always — on a post-train checkpoint this
+                    # is base-skill forgetting, live (gen-3's +0.74 bpb
+                    # would have been visible per-group, per-eval).
                     cont = self.gen_raw(key, max_new=48)[:len(target)]
                     by_group.setdefault(group, []).append(
                         similarity(cont, target))
-        return {f"probe/verbatim/{g}": sum(v) / len(v)
-                for g, v in by_group.items()}
-
-    def probe_dumps(self) -> list[dict]:
-        out = []
-        for pid, raw, chatform in DUMP_PROMPTS:
-            prompt = chatform if self.chat else raw
-            text = self._ask(raw, chatform, max_new=80)
-            out.append({"id": pid, "prompt": prompt, "text": text})
+                    if self.chat:  # instruction-following variant
+                        reply = self.gen_chat(
+                            "Continue this text exactly: " + key,
+                            max_new=48)[:len(target)]
+                        by_chat.setdefault(group, []).append(
+                            similarity(reply, target))
+        out = {f"probe/verbatim/{g}": sum(v) / len(v)
+               for g, v in by_group.items()}
+        out.update({f"probe/verbatim_chat/{g}": sum(v) / len(v)
+                    for g, v in by_chat.items()})
         return out
+
+    def probe_task_formats(self) -> dict[str, float]:
+        """Chat-only: greedy 1-shot spot-checks of every RLVR task
+        format during SFT — a cheap preview of GRPO liveness (a task
+        whose format never generates will hand GRPO all-zero groups)."""
+        if not self.chat:
+            return {}
+        from .rl.tasks import TASKS
+        out = {}
+        for kind, make in TASKS.items():
+            scores = []
+            for i in range(2):
+                t = make(random.Random(f"{self.seed}:fmt:{kind}:{i}"))
+                pre = getattr(t, "preamble", None) or self.preamble
+                reply = self.gen_chat(t.prompt, preamble=pre, max_new=64)
+                scores.append(float(t.score(reply.strip())))
+            out[f"probe/task/{kind}"] = sum(scores) / len(scores)
+        return out
+
+    def probe_dumps(self, rotation: int | None = None, k: int = 3,
+                    temps: tuple = (0.0, 0.8)) -> list[dict]:
+        """Fixed-prompt generation dumps (the ROMEO keyhole,
+        pluralized): greedy + temperature variants per prompt.
+        rotation=None emits the full battery; an integer emits k
+        prompts per round, cycling, so in-loop cost stays at gen-3's
+        sample cadence while the full battery lands every ~len/k
+        rounds."""
+        prompts = DUMP_PROMPTS
+        if rotation is not None:
+            n = len(DUMP_PROMPTS)
+            prompts = [DUMP_PROMPTS[(rotation * k + i) % n] for i in range(k)]
+        was_training = self.model.training
+        self.model.eval()
+        try:
+            out = []
+            for pid, raw, chatform in prompts:
+                prompt = chatform if self.chat else raw
+                for temp in temps:
+                    text = self._ask(raw, chatform, max_new=80,
+                                     temperature=temp)
+                    out.append({"id": pid, "prompt": prompt,
+                                "temp": temp, "text": text})
+            return out
+        finally:
+            if was_training:
+                self.model.train()
 
     # ---- entry point ----
 
-    def run(self, families=("facts", "identity", "date", "verbatim")):
-        scalars: dict[str, float] = {}
-        for fam in families:
-            scalars.update(getattr(self, f"probe_{fam}")())
-        return scalars
+    def run(self, families=("facts", "identity", "date", "verbatim",
+                            "task_formats")):
+        was_training = self.model.training
+        self.model.eval()
+        try:
+            scalars: dict[str, float] = {}
+            with torch.no_grad():
+                for fam in families:
+                    scalars.update(getattr(self, f"probe_{fam}")())
+            return scalars
+        finally:
+            if was_training:
+                self.model.train()

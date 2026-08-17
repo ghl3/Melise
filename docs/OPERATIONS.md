@@ -49,17 +49,21 @@ hours ago.
 ### Launch sequence — three steps, strictly in this order
 
 **1. Launch** with the full recipe env (see the generation's run doc for
-the real values — the script's built-in defaults are a *previous*
-generation's recipe, so always pass everything explicitly):
+the real values — the script's built-in defaults are *a* generation's
+recipe, not necessarily yours, so always pass everything explicitly):
 
-    DONE_CMD="gcloud scheduler jobs pause kimi3-spot-restart --location=us-central1; sudo shutdown -h +2" \
+    DONE_CMD="sudo shutdown -h +2" \
     PRESET=... TOKENIZER=... DATA_MIX=configs/... \
     PT_STEPS=... PT_BATCH=... SFT_BATCH=... SFT_STEPS=... \
     nohup bash scripts/pipeline.sh > ~/pipeline_nohup.log 2>&1 &
 
 `DONE_CMD` runs only after `PIPELINE_DONE` (there is no trap — killing
-the pipeline does *not* trigger it), so a finished run pauses its own
-restarter and halts the VM.
+the pipeline does *not* trigger it), so a finished run halts the VM.
+**DONE_CMD must NOT try to pause the scheduler**: the VM's scopes lack
+cloudscheduler, the pause fails SILENTLY, and the enabled restarter
+then boot-loops a finished run (gen-3: 15h, ~$9). Keep the restarter
+paused from the laptop whenever running on-demand; resume it only to
+ride out a Spot/stockout recovery, then re-pause.
 
 **2. Verify it's stepping**: `grep "^step" ~/pretrain_run.log` shows
 step lines with tok/s; the first val line (with per-domain bracket)
@@ -115,17 +119,25 @@ halts itself when the run finishes. Use the bucket view.
 
 ### What to watch, per stage
 
-- **Pretrain**: `val/bpb` (byte-true bits-per-byte, comparable across
-  runs and tokenizers), `val_domain/*` (is each register being
-  learned), `train/entropy_bits` (starts near log2(vocab), falls),
-  `train/tok_per_sec`, `moe/*` (expert load balance), and the sampled
-  generations in the log — register drift is visible there first.
+- **Pretrain**: `val/bpb` (byte-true, deterministic fixed-window eval;
+  `val/best` = trailing-3 mean driving best.pt), `val_domain/*` +
+  `val_group/*` (is each register/group being learned),
+  `val_domain_acc|top5|ent/*` (bpb↑+acc-flat+ent↓ = confidence
+  misallocation, bpb↑+acc↓ = rank loss — the gen-3 eviction shapes,
+  legible live), `probe/*` (facts/identity/date/verbatim arcs; watch
+  `probe/facts/*/heldout` and `probe/identity/novel` especially),
+  `train/entropy_bits`, `train/tok_per_sec`, `moe/*` (expert load
+  balance at 40 experts), and the sampled generations + probe dumps.
 - **SFT**: `val/bpb` is bits per *assistant byte* (not comparable to
   pretrain bpb), `val/tasks_bpb`, `val_source/*` (per-corpus, every 4th
-  eval — identity especially).
+  eval — identity especially), `train/replay_bpb` (the anti-forgetting
+  anchor — should stay near the pretrain end-state), and the same
+  `probe/*` tags in chat form — `probe/identity/novel` falling here is
+  the gen-3 failure repeating; act on it.
 - **GRPO**: eval reward (`best.pt` here = highest eval reward, unlike
   other stages), `rollout/dead_frac` (all-zero-advantage groups —
-  should fall), `rollout/entropy`, per-task eval numbers in the log.
+  should fall), `rollout/entropy`, per-task eval numbers in the log
+  (context_recall + facts are the gen-4 additions), `probe/*`.
 - **Cross-generation comparisons**: ONLY `eval_checkpoint.py` numbers
   on the reserved test slice are comparable. Mid-run honest number:
   pull the bucket-synced `best.pt` to the laptop and run
@@ -158,6 +170,12 @@ Resume semantics to know before improvising: `--resume` picks the
 **newest** (mtime) run dir per stage. Killed/aborted run dirs with a
 `latest.pt` look resumable — delete them (local *and* bucket copy) if
 they must never be picked up, or make sure a newer live run dir exists.
+Downstream stages additionally require the dir to CHAIN to the current
+upstream run (`chain_ok`: run.json's lineage must name the upstream run
+dir) — finished-looking dirs from another generation or a toy
+validation are refused and a fresh stage starts instead. This closes
+the gen-3 skipped-post-training incident, but do not lean on it:
+**still delete toy run dirs (local + bucket) before a real launch.**
 
 ## Manual operations
 
@@ -198,7 +216,8 @@ iterating on post-training without touching the base model.
 | data → VM | on the VM: `python scripts/download_data.py` (manifest + sha256) |
 | new dataset → bucket | laptop only: `scripts/add_dataset.py` (origins + processing live there) |
 | sample a checkpoint | `scripts/sample.py --checkpoint <best.pt> --prompt … --temperature …` |
-| serve for the chat UI | `scripts/serve.py` — add `--preamble "You are Lily, a tiny language model."` for gen-3+ models (trained with one); omit for older | 
+| probe a checkpoint | `scripts/probe_checkpoint.py <best.pt> --out` (full battery; `--quick` to smoke; probes.jsonl self-pushes to the bucket) |
+| serve for the chat UI | `scripts/serve.py` — add `--preamble "You are Melise, a tiny language model."` for gen-3+ models (trained with one); omit for older. Append ` Today is {date}.` ONLY for gen-4+ (trained on dated preambles). Cloud Run sets it via `SERVE_PREAMBLE` | 
 | audit training data | `scripts/sample_data.py` (stage-aware; a 500-conversation random audit beats any dataset card) |
 | rebuild TB from metrics | `scripts/rebuild_tb.py <run-dir>` (`tb/` is derived; `metrics.jsonl` is truth) |
 | rebuild metrics from logs | `scripts/recover_metrics.py <stage log> <run-dir>` then `rebuild_tb.py` (disaster path — stdout logs carry the full metric history) |

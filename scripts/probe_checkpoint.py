@@ -79,6 +79,12 @@ def main() -> None:
         with open(out, "a") as fh:
             fh.write(json.dumps(rec) + "\n")
         print(f"\nappended -> {out}")
+        # Post-hoc artifacts never ride the training-stage sync — push
+        # to the run's bucket mirror ourselves (see run_utils).
+        sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+        from run_utils import push_run_file
+        if push_run_file(out):
+            print(f"pushed {out.parent.name}/probes.jsonl to bucket")
 
 
 if __name__ == "__main__":

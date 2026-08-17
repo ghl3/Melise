@@ -114,6 +114,28 @@ def kimi3_medium(**overrides) -> Kimi3Config:
     return Kimi3Config(**kwargs)
 
 
+def kimi3_medium_wide(**overrides) -> Kimi3Config:
+    """~163M params (78M active/token): d=512, 13 attention layers,
+    40 experts — the gen-4 shape (docs/runs/gen4-ideas.md, Proposal v1).
+
+    Large's width with medium's depth: 3 blocks, deliberately NOT
+    large's 4, to cap FLOPs. The routed pool triples vs medium (31.9M →
+    94.4M params) while active/token grows only 1.72× — width fattens
+    each expert (1.33M → 2.36M) while the count grows 24 → 40. This
+    targets gen-3's measured failure mode: small-domain eviction lives
+    in FFN storage, and experts are the cheapest storage per unit
+    wall-clock. Per-layer shapes follow the K3 rules at d=512 (head_dim
+    32, latent d/2, expert hidden = latent, shared 2d, dense 4d)."""
+    kwargs = dict(
+        d_model=512, n_blocks=3, n_heads=16,
+        kv_lora_rank=128, kda_decay_rank=32,
+        n_experts=40, top_k=4, moe_latent_dim=256, expert_hidden=256,
+        shared_expert_hidden=1024, dense_hidden=2048,
+    )
+    kwargs.update(overrides)
+    return Kimi3Config(**kwargs)
+
+
 def kimi3_large(**overrides) -> Kimi3Config:
     """~180M params: d=512, 17 attention layers, 32 experts."""
     kwargs = dict(

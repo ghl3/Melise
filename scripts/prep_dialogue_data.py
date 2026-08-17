@@ -1,23 +1,30 @@
-"""Fetch + format the dialogue corpora for the gen-3 pretrain mix.
+"""Fetch + format the dialogue corpora for the pretrain mix.
 
     .venv/bin/python scripts/prep_dialogue_data.py
 
 Writes:
-    data/dialogue_movies.txt  Cornell Movie-Dialogs (~220k movie-script
-                              exchanges; iso-8859-1 source)
-    data/dialogue_daily.txt   DailyDialog (~13k everyday conversations;
-                              tokenized source, lightly detokenized)
+    data/dialogue_movies.txt   Cornell Movie-Dialogs (~220k movie-script
+                               exchanges; iso-8859-1 source)
+    data/dialogue_daily.txt    DailyDialog (~13k everyday conversations;
+                               tokenized source, lightly detokenized)
+    data/dialogue_persona.txt  PersonaChat / ConvAI2 (~18k crowdworker
+                               get-to-know-you chats; gen-4 addition)
+    data/dialogue_blended.txt  BlendedSkillTalk (~7k chats blending
+                               personality/knowledge/empathy; gen-4)
 
-Both render as dash-prefixed turns with a blank line between
+All render as dash-prefixed turns with a blank line between
 conversations — plain conversational text, NOT the chat template (these
 are pretrain corpora; the `dialogue_` prefix keeps them excluded from
-the gen-2 mix config and from sft.py's chat_* glob). This is the
-casual-dialogue register the gen-2 mix had none of.
+sft.py's chat_* glob). This is the casual-dialogue register the gen-2
+mix had none of — the product register, and the gen-3 domain that
+improved all run without saturating, which is why gen-4 grows it.
 """
 
 import ast
+import json
 import re
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -109,11 +116,71 @@ def build_daily(out: Path) -> None:
     write_dialogues(out, dialogues)
 
 
+def build_persona(out: Path) -> None:
+    """PersonaChat via the ParlAI S3 mirror (ConvAI2 line format:
+    '<num> <utterance>\\t<reply>\\t...'; num resets to 1 per dialogue).
+    The none_original files carry no persona lines — pure dialogue."""
+    raw = fetch("http://parl.ai/downloads/personachat/personachat.tgz",
+                CACHE / "personachat.tgz")
+    dialogues, cur = [], []
+    with tarfile.open(raw) as t:
+        for name in ("personachat/train_none_original.txt",
+                     "personachat/valid_none_original.txt",
+                     "personachat/test_none_original.txt"):
+            text = t.extractfile(name).read().decode("utf-8")
+            for line in text.splitlines():
+                num, _, rest = line.partition(" ")
+                if not num.isdigit():
+                    continue
+                if int(num) == 1 and cur:
+                    dialogues.append(cur)
+                    cur = []
+                parts = rest.split("\t")
+                if len(parts) >= 2:
+                    # Same whitespace-tokenized source style as
+                    # DailyDialog ("hi , how are you ?") — detokenize.
+                    cur += [detok(parts[0]), detok(parts[1])]
+            if cur:
+                dialogues.append(cur)
+                cur = []
+    write_dialogues(out, dialogues)
+
+
+def build_blended(out: Path) -> None:
+    """BlendedSkillTalk via the ParlAI S3 mirror (json episodes; the two
+    seed utterances precede the 'dialog' turn list)."""
+    raw = fetch("http://parl.ai/downloads/blended_skill_talk/"
+                "blended_skill_talk.tar.gz",
+                CACHE / "blended_skill_talk.tar.gz")
+    dialogues = []
+    with tarfile.open(raw) as t:
+        for member in t.getmembers():
+            if not member.name.endswith((".json",)):
+                continue
+            episodes = json.load(t.extractfile(member))
+            if not isinstance(episodes, list):
+                continue
+            for ep in episodes:
+                turns = []
+                for key in ("free_turker_utterance",
+                            "guided_turker_utterance"):
+                    if ep.get(key):
+                        turns.append(ep[key])
+                for item in ep.get("dialog", []):
+                    turns.append(item[1] if isinstance(item, (list, tuple))
+                                 else str(item))
+                if turns:
+                    dialogues.append(turns)
+    write_dialogues(out, dialogues)
+
+
 def main() -> None:
     CACHE.mkdir(exist_ok=True)
     data = PROJECT_ROOT / "data"
     build_cornell(data / "dialogue_movies.txt")
     build_daily(data / "dialogue_daily.txt")
+    build_persona(data / "dialogue_persona.txt")
+    build_blended(data / "dialogue_blended.txt")
 
 
 if __name__ == "__main__":

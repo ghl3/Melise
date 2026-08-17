@@ -1,5 +1,5 @@
 {
-  "_comment": "Gen-4 draft mix (2026-08-14): grouped corpora with target shares. Shares sum to 1.0 (every file grouped). fineweb share assumes the 400MB->2GB expansion — REVISIT at freeze if the corpus differs. emma + great_expectations are full holdouts (test-only, never trained). Splits: enwik8/fineweb/dialogue/war carried from gen-3; sherlock/moby/jane_eyre added as fiction forgetting canaries (jane_eyre = a NEW book).",
+  "_comment": "Gen-4 mix (updated 2026-08-17): grouped corpora with target shares. Shares sum to 1.0 (every file grouped). fineweb share assumes the 400MB->2GB expansion — REVISIT at freeze if the corpus differs. Dialogue grew to 4 corpora (PersonaChat + BlendedSkillTalk added) and 7% — the product register, never saturated in gen-3. emma + great_expectations are full holdouts (test-only, never trained). Splits: enwik8/fineweb/dialogue/war carried from gen-3; sherlock/moby/jane_eyre fiction forgetting canaries (jane_eyre = a NEW book); dialogue_persona = the daily-chat register canary.",
   "include": "data/*.txt",
   "exclude": [
     "data/chat_*.txt",
@@ -7,12 +7,13 @@
     "data/great_expectations.txt"
   ],
   "groups": {
-    "fineweb": {"include": "data/fineweb_edu.txt", "share": 0.46},
+    "fineweb": {"include": "data/fineweb_edu.txt", "share": 0.44},
     "wikitext": {"include": "data/wikitext103_train.txt", "share": 0.16},
     "enwik8": {"include": "data/enwik8.txt", "share": 0.05},
     "dialogue": {
-      "include": ["data/dialogue_movies.txt", "data/dialogue_daily.txt"],
-      "share": 0.05
+      "include": ["data/dialogue_movies.txt", "data/dialogue_daily.txt",
+                  "data/dialogue_persona.txt", "data/dialogue_blended.txt"],
+      "share": 0.07
     },
     "books": {
       "include": [
@@ -46,6 +47,7 @@
     "data/enwik8.txt": {"train": 0.9, "val": 0.05, "test": 0.05},
     "data/fineweb_edu.txt": {"train": 0.995, "val": 0.005},
     "data/dialogue_movies.txt": {"train": 0.99, "val": 0.01},
+    "data/dialogue_persona.txt": {"train": 0.99, "val": 0.01},
     "data/war_and_peace.txt": {"train": 0.99, "val": 0.01},
     "data/sherlock.txt": {"train": 0.98, "val": 0.02},
     "data/moby_dick.txt": {"train": 0.99, "val": 0.01},

@@ -73,8 +73,11 @@ def _encode_slice_cached(path: Path, lo: int, hi: int, tok) -> np.ndarray:
 def load_data(paths, device, splits, tok=None):
     """Load each corpus as a token tensor: uint8 bytes for the byte
     tokenizer (int64 batches are cast on the fly in get_batch — storing
-    corpora as int64 would be 8× the memory), int32 token ids for BPE
-    (disk-cached; see _encode_slice_cached).
+    corpora as int64 would be 8× the memory), int16 token ids for BPE
+    (disk-cached; see _encode_slice_cached). int16 halves the on-device
+    footprint vs int32 — at gen-4 scale (~1B tokens resident on a
+    22.5 GiB L4) that's ~2 GB handed back to activations/batch. Any
+    vocab ≤ 32768 fits; asserted at load.
 
     `splits` maps path → (train_frac, val_frac) as BYTE fractions
     regardless of tokenizer — slicing happens before encoding. Files
@@ -103,11 +106,13 @@ def load_data(paths, device, splits, tok=None):
             data = torch.frombuffer(bytearray(raw), dtype=torch.uint8).to(device)
             train, val = data[:train_end], data[train_end:val_end]
         else:
+            assert tok.vocab_size <= 1 << 15, \
+                f"vocab {tok.vocab_size} overflows int16 corpus storage"
             train = torch.from_numpy(
-                _encode_slice_cached(path, 0, train_end, tok).astype(np.int32)
+                _encode_slice_cached(path, 0, train_end, tok).astype(np.int16)
             ).to(device)
             val = torch.from_numpy(
-                _encode_slice_cached(path, train_end, val_end, tok).astype(np.int32)
+                _encode_slice_cached(path, train_end, val_end, tok).astype(np.int16)
             ).to(device) if val_end > train_end else None
         train_list.append(train)
         if val_end > train_end:
@@ -181,9 +186,11 @@ def load_data_mix(mix_path):
     ungrouped files' share). If every file is grouped, shares are the
     weights directly and should sum to 1.
 
-    Returns (paths, multipliers, splits) with multipliers aligned to
-    paths and splits keyed by path. Keys may be project-relative paths or
-    bare filenames.
+    Returns (paths, multipliers, splits, groups) with multipliers
+    aligned to paths, splits keyed by path, and groups mapping each
+    grouped path -> its group name (ungrouped files absent) — callers
+    use it to aggregate per-file metrics into per-group curves
+    (val_group/*). Keys may be project-relative paths or bare filenames.
     """
     mix = json.loads(mix_path.read_text())
     includes = mix.get("include", "data/*.txt")
@@ -233,9 +240,9 @@ def load_data_mix(mix_path):
         )
 
     groups = mix.get("groups", {})
+    grouped: dict = {}  # path -> group name
     if groups:
         path_idx = {p: i for i, p in enumerate(paths)}
-        grouped: dict = {}  # path -> group name
         members: dict = {}  # group name -> [paths]
         for gname, spec in groups.items():
             gincludes = spec["include"]
@@ -272,7 +279,7 @@ def load_data_mix(mix_path):
             for p in gpaths:
                 mults[path_idx[p]] = m_g
 
-    return paths, mults, splits
+    return paths, mults, splits, grouped
 
 
 # ---------- Conversations (SFT) ----------

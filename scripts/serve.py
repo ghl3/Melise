@@ -32,6 +32,7 @@ import sys
 import threading
 import time
 from collections import defaultdict, deque
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -57,6 +58,21 @@ MAX_NEW_CAP = 512
 MAX_SECONDS = 120.0  # wall-clock cap per generation
 PREAMBLE = ""  # --preamble; only for models TRAINED with one (gen-3+)
 _busy = threading.Semaphore(1)  # batch-1 server: one generation at a time
+
+
+def render_preamble() -> str:
+    """The deployed preamble, with a literal '{date}' placeholder
+    replaced by the CURRENT date per request ('Sunday, August 17,
+    2026') — the date is then a retrieve-from-context field the model
+    was trained to read (gen-4+; identity corpus v2 / context_recall).
+    Only use the placeholder with models trained on dated preambles —
+    gen-3 and earlier never saw one and answer date questions with the
+    trained honest refusal instead."""
+    if "{date}" not in PREAMBLE:
+        return PREAMBLE
+    now = datetime.now()
+    return PREAMBLE.replace(
+        "{date}", f"{now.strftime('%A, %B')} {now.day}, {now.year}")
 
 
 # ---------- loading ----------
@@ -246,7 +262,7 @@ def chat(req: ChatRequest):
     max_new = min(req.max_tokens, MAX_NEW_CAP)
     ids, dropped = conversation_ids(
         [m.model_dump() for m in req.messages], entry["tok"],
-        entry["cfg"].max_seq_len, reserve=max_new, preamble=PREAMBLE)
+        entry["cfg"].max_seq_len, reserve=max_new, preamble=render_preamble())
     max_new = min(max_new, entry["cfg"].max_seq_len - len(ids))
     if max_new < 1:
         raise HTTPException(400, "conversation does not fit the model context")
@@ -314,11 +330,17 @@ def main():
                    help="hard cap on tokens per completion")
     p.add_argument("--max-seconds", type=float, default=120.0,
                    help="wall-clock cap per generation")
-    p.add_argument("--preamble", type=str, default="",
+    p.add_argument("--preamble", type=str,
+                   default=os.environ.get("SERVE_PREAMBLE", ""),
                    help="system preamble prepended to every prompt — use "
                         "transformer.chat.DEFAULT_PREAMBLE for models "
                         "trained with one (gen-3+); leave empty for older "
-                        "checkpoints, which never saw preambles")
+                        "checkpoints, which never saw preambles. A literal "
+                        "'{date}' is replaced with the current date per "
+                        "request — ONLY for models trained on dated "
+                        "preambles (gen-4+). Default: $SERVE_PREAMBLE "
+                        "(how the Cloud Run container sets it — the image "
+                        "CMD passes no flags)")
     args = p.parse_args()
 
     global DEVICE, MAX_NEW_CAP, MAX_SECONDS, PREAMBLE

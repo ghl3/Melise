@@ -85,6 +85,29 @@ HTTP range reads (no 2 GB shard download); dialogue by
 `prep_dialogue_data.py` (DailyDialog via the roskoN HF mirror — the
 original yanran.li zip is behind a bot check).
 
+### Gen-4 mix (`configs/mix-gen4-chat.json`, updated 2026-08-17)
+
+Grouped corpora: each group's *share* of the sampling weight is the
+knob (solved to per-file multipliers at load; within a group, files
+sample by byte size = uniform effective epochs). Shares: fineweb 44%
+(2 GB target — `prep_fineweb.py` now draws row groups in seeded-random
+order across all 14 shards, so every CommonCrawl dump is represented;
+gen-3's slice was 3 dumps, nothing post-Jan-2020), wikitext 16%, books
+15% (45 works incl. 16 added 2026-08-14), code 8%, **dialogue 7%**,
+enwik8 5%, math 4%, reference 1%.
+
+| Change | Dataset | Size | Notes |
+|---|---|---|---|
+| added | dialogue-persona (PersonaChat/ConvAI2, ParlAI mirror) | 8.3 MB | detokenized like DailyDialog |
+| added | dialogue-blended (BlendedSkillTalk, ParlAI mirror) | 6.4 MB | crowdworker chat, natural text |
+| added | chat-facts (generated, `gen_fact_sft.py`) | 0.3 MB | TRAIN split of configs/facts.json only — the heldout split is never rendered anywhere |
+| regenerated | chat-identity (`gen_identity_sft.py` v2) | 0.5 MB | ~370-name pool, dated preambles, ask-twice; Melise present, not dominant |
+| regenerated | chat-tasks (`gen_task_sft.py`) | 1.9 MB | now includes context_recall + facts families |
+| holdouts | emma, great-expectations | 1.9 MB | never trained, any stage — probe/eval only |
+
+Fiction/dialogue val canaries: war_and_peace (cross-gen continuity),
+sherlock, moby_dick, jane_eyre (new book), dialogue_persona (new).
+
 ### enwik8 is load-bearing
 
 `configs/mix-downweight-wiki.json` splits enwik8 90/5/5: the 5% val

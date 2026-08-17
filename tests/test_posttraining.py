@@ -186,6 +186,54 @@ def test_weighted_task_sampling():
     assert abs(uniform.count("copy") - 100) < 40  # no-weights path stays uniform
 
 
+def test_context_recall_task():
+    """The gen-4 preamble-retrieval family: every variant carries its own
+    randomized preamble; scoring rewards copy-when-given and honest
+    refusal-when-not, and blocks the invent-a-date and list-spam hacks."""
+    rng = random.Random(6)
+    seen = set()
+    for _ in range(120):
+        t = TASKS["context_recall"](rng)
+        assert t.preamble and t.preamble.startswith("You are ")
+        assert t.score(t.answer) == 1.0, (t.preamble, t.prompt, t.answer)
+        if "Today is" in t.preamble:          # date variant
+            seen.add("date")
+            date = t.preamble.split("Today is ")[1].rstrip(".")
+            wd = date.split(",")[0]
+            assert t.score(f"It's {wd}!") == 1.0        # weekday alone OK
+            assert t.score("It's Blursday.") == 0.0
+        elif "name" in t.prompt.lower() or "call" in t.prompt.lower() \
+                or "Who" in t.prompt:          # name variant
+            seen.add("name")
+            bot = t.preamble.split("You are ")[1].split(",")[0]
+            assert t.score(f"I'm {bot}.") == 1.0
+            assert t.score(" ".join([bot] * 12)) == 0.0  # length cap
+            assert t.score("I'm Zorblatt.") == 0.0
+        else:                                  # no-date honesty variant
+            seen.add("no_date")
+            assert t.score("It is Tuesday, March 3, 2025.") == 0.0
+            assert t.score("I don't know — it's probably Tuesday.") == 0.0
+            assert t.score("I may not be able to tell — I don't know; "
+                           "I have no calendar.") == 1.0
+    assert seen == {"name", "date", "no_date"}
+
+
+def test_facts_task_train_split_only():
+    """The facts task must never draw a heldout-split entry — the
+    heldout half is the probe suite's measuring stick."""
+    from transformer.facts import load_facts
+    train_prompts = {f["chat"] for f in load_facts(split="train")}
+    heldout_prompts = {f["chat"] for f in load_facts(split="heldout")}
+    rng = random.Random(7)
+    for _ in range(300):
+        t = TASKS["facts"](rng)
+        assert t.prompt in train_prompts
+        assert t.prompt not in heldout_prompts
+        assert t.preamble is None            # deployed preamble applies
+        assert t.score(t.answer) == 1.0
+        assert t.score("zzz nonsense") == 0.0
+
+
 def test_preamble_encoding():
     from transformer.chat import (assistant_mask_ids, encode_conversation,
                                   encode_ids, make_prompt_ids, preamble_of)

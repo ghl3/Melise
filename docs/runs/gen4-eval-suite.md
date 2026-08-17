@@ -162,13 +162,40 @@ like the name:
 (1k steps ≈ 40 min training) ≈ 2–3% overhead. Dump rotation keeps the
 sample cadence at gen-3's cost.
 
-## STATUS 2026-08-17: core implemented + first results
+## STATUS 2026-08-17 (evening): SUITE COMPLETE — everything above built
 
-`transformer/probes.py` (facts/identity/date/verbatim/dumps, both
-surface forms), `configs/facts.json` (61-entry starter table),
-`scripts/probe_checkpoint.py`, scoring unit tests. Not yet: in-loop
-wiring, corpus generators (facts/identity v2), context_recall RLVR
-task, chat-wrapped verbatim variant.
+- In-loop wiring: pretrain.py (raw forms) / sft.py / grpo.py (chat
+  forms) via `--probe-every`; TB `probe/*` + metrics `probe` /
+  `probe_dump` events; rebuild_tb.py replays them. Rotating dump
+  battery (k=2/round, greedy + t=0.8; temperature sampling runs
+  through a private CPU generator so the training RNG streams — the
+  exact-resume contract — are untouched). Probe seed fixed per run:
+  every round scores the same prompts/names/windows, so curves are
+  trend-watchable; the full facts table runs offline on keepers
+  (in-loop rounds take the first 8/family).
+- `configs/facts.json` 58 → 298 entries; forced-choice entries carry
+  a `reject` list (naming both options scores 0 — closes the
+  echo-the-question slack a facts REWARD would have found).
+- Corpus generators: gen_fact_sft.py (train split only, scorer-
+  self-checked), gen_identity_sft.py v2 (~370-name pool from
+  transformer/identity.py, Melise ~8%, dated preambles + retrieval
+  turns + honesty + ask-twice; import-time asserts keep TRAIN_NAMES
+  disjoint from HELDOUT_NAMES and the novel-name space — a collision
+  refuses to import).
+- RLVR: `context_recall` (name/date/refusal variants, randomized
+  per-task preambles plumbed through rollout + eval prompt assembly)
+  and `facts` (train split) joined TASKS + the headroom weights.
+- `probe/task_formats` (all 8 families, 1-shot greedy) and the
+  chat-wrapped verbatim variant (`probe/verbatim_chat/*`) added.
+- serve.py renders `{date}` in the preamble per request (gen-4+ only).
+- Facts/name/date helpers moved to `transformer/facts.py` +
+  `transformer/identity.py` (probes ↔ rl.tasks import cycle broken);
+  probes re-exports the old names.
+
+Remaining (VM window): full-battery baselines on gen-2/gen-3 best.pts
+(`probe_checkpoint.py --out`, all stages — reference lines for gen-4's
+TB curves), and a CUDA probe-round timing during the hardware probe
+(cadence budget ≤3%).
 
 First run (--quick) on gen-3's pretrain best vs rlvr best:
 

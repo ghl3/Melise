@@ -86,6 +86,21 @@ def parse_args() -> argparse.Namespace:
         help="Which reserved slice to evaluate",
     )
     p.add_argument(
+        "--holdout",
+        action="store_true",
+        help="Treat --data as a fully-held-out file (excluded from the "
+        "mix, never trained — e.g. emma.txt / great_expectations.txt): "
+        "evaluate 100%% of its bytes as the test slice, skipping the "
+        "splits lookup",
+    )
+    p.add_argument(
+        "--no-bucket-push",
+        action="store_true",
+        help="Don't upload evals.jsonl to the run's bucket mirror after "
+        "writing (push is on by default when GCS is configured — the "
+        "training-stage sync never covers post-hoc evals)",
+    )
+    p.add_argument(
         "--seq-len",
         type=int,
         default=None,
@@ -129,8 +144,19 @@ def resolve_slice(args: argparse.Namespace) -> tuple[torch.Tensor, str]:
     Mirrors transformer.data.load_data's arithmetic exactly: train ends
     at int(n·train_frac), val at train_end + int(n·val_frac), and the
     test slice is everything after val — bytes pretraining never loads.
+
+    --holdout instead evaluates the whole file: for corpora excluded
+    from the mix entirely (the fully-held-out books), every byte is
+    test.
     """
-    paths, _mults, splits = load_data_mix(args.data_mix)
+    if args.holdout:
+        raw = args.data.read_bytes()
+        data = torch.frombuffer(bytearray(raw), dtype=torch.uint8)
+        if args.max_bytes > 0:
+            data = data[: args.max_bytes]
+        return data, (f"{args.data.name}[0:{data.shape[0]:,}] "
+                      f"(holdout — full file, {data.shape[0]:,} bytes)")
+    paths, _mults, splits, _groups = load_data_mix(args.data_mix)
     path = args.data.resolve()
     if path not in [p.resolve() for p in paths]:
         raise SystemExit(f"{args.data} is not included by {args.data_mix}")
@@ -221,7 +247,7 @@ def main() -> None:
             "n_params": model.num_parameters(),
             "step": ckpt.get("step"),
             "tokens_seen": ckpt.get("tokens_seen"),
-            "split": args.split,
+            "split": "holdout" if args.holdout else args.split,
             "data": args.data.name,
             "seq_len": seq_len,
             "bytes": n_bytes,
@@ -239,11 +265,20 @@ def main() -> None:
     if not results:
         raise SystemExit("no checkpoints evaluated")
 
-    # Results live with the run: append to <run>/evals.jsonl so offline
-    # eval history syncs to the bucket alongside the checkpoints.
+    # Results live with the run: append to <run>/evals.jsonl — and push
+    # it to the bucket mirror ourselves. BucketSync's last kick fires at
+    # the final training save, BEFORE offline evals append, so without
+    # this the file never syncs (gen-3 incident: retrieved manually
+    # through an L4-stockout window).
+    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+    from run_utils import push_run_file
     for r in results:
-        with open(Path(r["checkpoint"]).parent / "evals.jsonl", "a") as f:
+        evals_path = Path(r["checkpoint"]).parent / "evals.jsonl"
+        with open(evals_path, "a") as f:
             f.write(json.dumps(r) + "\n")
+        if not args.no_bucket_push:
+            if push_run_file(evals_path):
+                print(f"  pushed {evals_path.parent.name}/evals.jsonl to bucket")
 
     if args.json is not None:
         with open(args.json, "a") as f:

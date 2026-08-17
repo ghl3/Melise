@@ -419,3 +419,103 @@ remaining: identity-tail rerun decision (Melise name fix, ~1.5h
 GPU), run-doc Results fill, memory updates, formal chat battery vs
 gen-2, meliseai.com swap (rlvr best.pt + bpe8k tokenizer in image +
 preamble). Deferred still deferred: bpe16k, DPO.
+
+## 2026-08-17 (evening) — Gen-4 build-out: instruments, corpora, recipe; gen-3 live on meliseai.com
+
+**Goal.** Execute the full gen-4 preparation list in one pass — every
+eval/probe/pipeline/data change the gen-3 post-mortem called for —
+plus the user-approved decisions: WSD schedule, 2.2B budget, gen-3 to
+production, SFT held at 20k, new public dialogue corpora, chat-facts
+into both SFT and GRPO.
+
+**Setup / work done.**
+- **Preset**: `kimi3-medium-wide` (d=512, 3 blocks, 40 experts top-4)
+  — 163.2M / 94.4M routed / 78.3M active, matching the proposal's
+  counted numbers exactly; test-pinned.
+- **Eval overhaul**: deterministic fixed-window per-domain evals
+  (pinned seeded windows; zero draw noise, equal coverage) with
+  accuracy/top-5/entropy triples; byte-weighted `val_group/*`;
+  best.pt = min trailing-3 val_bpb (resume-safe via checkpoint
+  `val_bpb_hist`); keeper checkpoints every 25k exempt from pruning;
+  BPE corpora stored on-device as int16 (~2 GB freed at gen-4 scale).
+- **WSD** in `lr_at` (hold + linear decay over final 15%): extending
+  --steps mid-hold is surgery-free; decay's eviction cost is paid at
+  a chosen time.
+- **Probe suite completed + wired** into all three loops
+  (`--probe-every`; TB `probe/*`, metrics probe/probe_dump events;
+  rotating dumps greedy+t0.8 via a private CPU RNG — training
+  streams untouched). facts.json 58 → 298 with reject-lists (the
+  forced-choice echo slack — "hot or cold" — closed before a facts
+  REWARD could farm it); `probe/task_formats`; chat-wrapped verbatim.
+- **Identity v2**: `transformer/identity.py` — ~370-name train pool
+  (Melise ~8%, never dominant), 16 held-out names + the novel-name
+  space reserved by IMPORT-TIME asserts (they caught a real collision
+  during authoring: Bram). gen_identity_sft v2 renders dated
+  preambles + retrieval turns + refusal preservation + ask-twice.
+- **RLVR**: `context_recall` (name/date/no-date variants; randomized
+  per-task preambles now plumbed through rollouts AND eval) and
+  `facts` (train split only) joined the weighted rotation.
+- **SFT replay**: `--replay-frac 0.03` interleaves raw pretrain-mix
+  batches (CPU-resident, zero GPU cost) — the +0.74 forgetting fix;
+  `train/replay_bpb` logged every replay step.
+- **Pipeline hardening**: `chain_ok` lineage guard (downstream dirs
+  must name the current upstream run — kills the gen-2-dirs AND
+  toy-dirs incident classes), DONE_CMD shutdown-only, evals.jsonl +
+  probes.jsonl self-push, holdout-book evals (emma/great_expectations
+  as 100%-test) + full probe battery in the post-stage evals,
+  gen-4 defaults + env knobs. rebuild_tb/recover_metrics replay all
+  new events (found 2 pre-existing recover_metrics regexes broken
+  since gen-3 — ent=/dead= fields — fixed).
+- **Data**: prep_fineweb multi-shard seeded row-group shuffle (9,673
+  row groups / 14 shards indexed; smoke draw hit 2015+2021 dumps);
+  2GB fetch running. PersonaChat (10.9k convs, 8.3 MB, detokenized)
+  + BlendedSkillTalk (6.8k convs, 6.4 MB) → dialogue 7% (fineweb
+  44%), dialogue_persona val canary. chat_identity/chat_tasks/
+  chat_facts regenerated + uploaded.
+- **Serving**: DEFAULT_PREAMBLE → Melise; serve.py renders `{date}`
+  per request (gen-4+ only); SERVE_PREAMBLE env; Dockerfile +
+  .dockerignore now ship ALL tokenizer configs (the bpe8k crash
+  footgun was enforced in TWO files).
+
+**Results.**
+- 41/41 tests (15+16+10), including new coverage: preset params,
+  fixed-window determinism + byte-weighted aggregation, WSD shape +
+  extension semantics, keeper pruning, windowed best, group
+  membership, context_recall scoring (copy/refuse/anti-hack), facts
+  train-split-only.
+- Smoke runs of all three loops on MPS: pretrain 20 steps (WSD +
+  fixed windows + `grp: books=…` + 29 probe scalars + keeper), SFT 6
+  steps (replay interleave + 46 chat-form scalars), GRPO 2 steps
+  (context_recall in rollouts with its own preamble; eval clean).
+- **Gen-3 is live on meliseai.com** (`melise-worker` rev 00002):
+  stripped rlvr best.pt (276 MB), Melise preamble via SERVE_PREAMBLE
+  (verified applied: 19 prompt tokens vs 9 bare). t=0 "What is your
+  name?" → "I'm called Leo." — the accepted pool-name limitation,
+  gen-4's to fix. CPU decode ≈ 4.5 tok/s (gen-4 at 78M active
+  projects ~2.5–3 — swap-time decision: --cpu 4 / bf16 / accept).
+- Probe-round cost on MPS: ~400 s raw / ~840 s chat on an UNTRAINED
+  model (every generation runs to max_new). CUDA + trained-model
+  early stopping should cut this ~10×; the hardware probe must time
+  a real round and keep in-loop overhead ≤3% (adjust *_PROBE_EVERY).
+
+**Learnings.**
+- The import-time assert pattern (reserved name strata) earns its
+  keep immediately — it refused my own authoring mistake minutes
+  after being written.
+- Closed-world scoring needs an explicit reject dimension the moment
+  it becomes a REWARD: contains-matching alone gives full credit for
+  echoing a forced choice, and GRPO farms any slack it finds.
+- The disaster-recovery parsers (recover_metrics) had silently rotted
+  as print formats evolved — schema-drift tests or shared format
+  constants would have caught it; for now they're fixed and the
+  rebuilders replay every event type the loops emit.
+
+**Next steps.** (1) fineweb 2GB upload once the fetch lands →
+`download_data.py` on the VM → token-cache pre-warm. (2) VM window:
+hardware probe (b4/b5 tok/s + peak GiB + GRPO memory + CUDA probe
+timing) → freeze PT_STEPS in `gen4-medium-wide.md`; cross-gen probe
+baselines on gen-2/gen-3 bests; gen-3 homework (routing map, eviction
+anatomy, lm_head SVD) on the idle GPU. (3) Toy full-pipeline
+validation incl. planted-stale-dir refusal → DELETE toy dirs →
+launch. Non-blocking gen-3 ritual: run-doc Results fill, chat battery
+vs gen-2.
