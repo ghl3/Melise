@@ -1,4 +1,4 @@
-# Gen-4 — medium-wide (RECIPE FROZEN 2026-08-17 — probed, toy-validated, launch-ready)
+# Gen-4 — medium-wide (LAUNCHED 2026-08-17 23:48 UTC — run `kimi3-medium-wide-163M-bright-river-20260817-234814`)
 
 The capacity-and-content generation: 2.26× the params (3× the routed
 storage) on ~1.5× the tokens, aimed squarely at gen-3's three measured
@@ -171,6 +171,17 @@ Options at swap time: --cpu 4, bf16 cast at load, or accept. Decide
 with a measured number, not now.
 
 ## Results (fill during/after)
+
+**Launch record (2026-08-17).** Pipeline started 23:48 UTC with the
+full env block above; pretrain run dir
+`kimi3-medium-wide-163M-bright-river-20260817-234814`. Verified at
+step 50: 2,792–2,839 tok/s (ETA ~215 h ≈ 9 d pretrain), grad_norm
+1.38–1.47 in warmup, GPU 22,138 MiB (the probed b4 high-water mark),
+mix loaded 55 files / 8 groups. Boot-resume crontab installed 23:52
+with the identical env (verified `crontab -l`); restarter PAUSED
+(on-demand). Cross-gen probe baselines (6 checkpoints, gen-2 + gen-3)
+completed and pushed before launch. Code on VM checksum-verified
+against a99c7af (15 files).
 
 - [ ] hardware probe numbers (tok/s, peak GiB, b4 vs b5, probe-round s)
 - [ ] frozen PT_STEPS + final mix byte counts

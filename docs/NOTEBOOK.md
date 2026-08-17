@@ -596,3 +596,12 @@ user's launch call: VM is RUNNING, warm, and clean — launch is the
 env block in gen4-medium-wide.md + boot-resume install + verification.
 Non-blocking afterwards: gen-3 run-doc Results fill, chat battery,
 routing map / eviction anatomy / lm_head SVD on the idle GPU windows.
+
+**Launch (23:48 UTC).** Baselines finished (6/6 pushed) → pre-flight
+(stale shells killed, GPU 0 MiB, crontab empty, 15 files
+checksum-identical to a99c7af) → pipeline launched with the full env
+block. Run dir `kimi3-medium-wide-163M-bright-river-20260817-234814`;
+step 50 at 2,839 tok/s, grad_norm 1.47, 22,138 MiB — all matching the
+probe. Boot-resume crontab installed 23:52 with identical env;
+restarter stays paused. Gen-4 is on the rails; ETA ~9 d pretrain,
+~11–12 d end-to-end.
