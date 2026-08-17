@@ -518,6 +518,14 @@ def main() -> None:
             print(f"\ndone — {n_done} steps in {elapsed:.1f}s; final: {final.name}")
             if best_step is not None:
                 print(f"best val_loss={best_val:.4f} at step {best_step} (best.pt)")
+            else:
+                # No eval ever ran (steps < eval_every): the final
+                # checkpoint is the best of one. Downstream stages init
+                # from best.pt — leaving it absent aborts the pipeline
+                # (bit us in toy validation 2026-08-17).
+                best_step = last_step_done
+                full_save(out_dir / "best.pt", last_step_done)
+                print("no eval ran — best.pt = final checkpoint")
             emit(metrics_f, event="end", step=last_step_done, elapsed_s=elapsed,
                  tokens_seen=tokens_seen, best_val=best_val, best_step=best_step)
         if writer is not None:
