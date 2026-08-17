@@ -219,9 +219,12 @@ param share at this scale. Revisit only with d=512-class capacity.
   for in-distribution names ("You are Lily" → "Lily", 3/3 at t=0.2)
   but does NOT generalize to the unseen name Melise ("You are
   Melise" → "Leo", 3/3). Name-copying is pool-limited at 72M. Gen-3
-  fix options: regen identity data with --name Melise + rerun the
-  cheap SFT tail (~1.5h GPU); gen-4: Melise in the pool + held-out
-  name generalization eval.
+  fix options considered: regen identity data + SFT tail rerun, or
+  gen-4 identity v2. DECIDED 2026-08-17: NO gen-3 tail rerun — jump
+  straight to gen-4; identity corpus v2 (Melise in pool +
+  preservation training + held-out name eval) is the fix of record.
+  Whether meliseai.com swaps to gen-3 as-is (she self-names from the
+  pool) or stays on gen-2 until gen-4 is an open user decision.
 
 ### 6. Infra / cost
 
