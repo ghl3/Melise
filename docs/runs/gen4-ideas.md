@@ -209,6 +209,13 @@ param share at this scale. Revisit only with d=512-class capacity.
   `--preamble "You are Melise..."`. DEFAULT_PREAMBLE Lily→Melise
   rename is a post-gen-3 decision. Gen-4 could bake Melise in as the
   dominant training name — decide after seeing gen-3's identity evals.
+  **MEASURED 2026-08-17 (local serve test):** preamble-reading works
+  for in-distribution names ("You are Lily" → "Lily", 3/3 at t=0.2)
+  but does NOT generalize to the unseen name Melise ("You are
+  Melise" → "Leo", 3/3). Name-copying is pool-limited at 72M. Gen-3
+  fix options: regen identity data with --name Melise + rerun the
+  cheap SFT tail (~1.5h GPU); gen-4: Melise in the pool + held-out
+  name generalization eval.
 
 ### 6. Infra / cost
 
