@@ -43,7 +43,8 @@ PT_LR_SCHEDULE="${PT_LR_SCHEDULE:-wsd}"   # hold at peak, linear decay over the 
 PT_DECAY_FRAC="${PT_DECAY_FRAC:-0.15}"
 PT_EVAL_WINDOWS="${PT_EVAL_WINDOWS:-16}"  # pinned windows per val domain (deterministic evals)
 PT_KEEP_EVERY="${PT_KEEP_EVERY:-25000}"   # milestone checkpoints exempt from pruning
-PROBE_EVERY="${PROBE_EVERY:-2000}"        # pretrain probe cadence (steps); ~4x eval cadence
+PROBE_EVERY="${PROBE_EVERY:-4000}"        # pretrain probe cadence. MEASURED: ~4 min/round on the L4
+                                          # (trimmed battery) -> 67 rounds ~= 2% of a ~10d pretrain
 DATA_MIX="${DATA_MIX:-configs/mix-gen4-chat.json}"
 SFT_STEPS="${SFT_STEPS:-20000}"
 SFT_BATCH="${SFT_BATCH:-5}"         # SFT carries no resident GPU corpus (~2 GB lighter than pretrain),
@@ -51,7 +52,8 @@ SFT_BATCH="${SFT_BATCH:-5}"         # SFT carries no resident GPU corpus (~2 GB 
                                     # OOMs use SFT_BATCH=4 SFT_STEPS=25000 (same examples as gen-3)
 SFT_SEQ="${SFT_SEQ:-2048}"
 SFT_EVAL_EVERY="${SFT_EVAL_EVERY:-200}"  # best.pt only lands at evals — keep < SFT_STEPS
-SFT_PROBE_EVERY="${SFT_PROBE_EVERY:-800}"
+SFT_PROBE_EVERY="${SFT_PROBE_EVERY:-2500}"  # chat rounds ~2x raw; 8 rounds ~= 4-5% of SFT — the stage
+                                            # where probes matter most (identity destruction happens here)
 SFT_REPLAY_FRAC="${SFT_REPLAY_FRAC:-0.03}"   # raw pretrain-mix batches vs SFT forgetting
 SFT_REPLAY_MIX="${SFT_REPLAY_MIX:-$DATA_MIX}"
 # Task-focus tail: a short low-LR pass over task-format data only, so the
@@ -62,7 +64,7 @@ SFT_TAIL_LR="${SFT_TAIL_LR:-3e-5}"
 SFT_TAIL_DATA="${SFT_TAIL_DATA:-data/chat_tasks.txt data/chat_identity.txt data/chat_facts.txt}"
 RLVR_STEPS="${RLVR_STEPS:-600}"
 RLVR_LR="${RLVR_LR:-1e-5}"
-RLVR_PROBE_EVERY="${RLVR_PROBE_EVERY:-100}"
+RLVR_PROBE_EVERY="${RLVR_PROBE_EVERY:-200}"
 # Pretrain eval/checkpoint cadence — a ~270k-step run at ~30 min per 500
 # steps; 250/500 (gen-3) would double the eval count for no insight.
 PT_EVAL_EVERY="${PT_EVAL_EVERY:-500}"

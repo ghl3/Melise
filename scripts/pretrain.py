@@ -597,8 +597,13 @@ def main() -> None:
     probe_runner, probe_round = None, 0
     if args.probe_every > 0:
         from transformer.probes import ProbeRunner
+        # In-loop battery is trimmed (8 facts/family, 1 verbatim window
+        # per file): a CUDA round measured 266 s at full verbatim —
+        # cadence × round must stay ≤~2-4% of stage wall-clock. Keeper
+        # checkpoints get the full battery offline (probe_checkpoint).
         probe_runner = ProbeRunner(model, tok, device, chat=False,
-                                   seed=args.seed, facts_per_family=8)
+                                   seed=args.seed, facts_per_family=8,
+                                   verbatim_per_file=1)
         print(f"probes: raw-continuation forms every {args.probe_every} steps")
 
     model.train()

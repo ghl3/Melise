@@ -254,7 +254,7 @@ def main() -> None:
         from transformer.probes import ProbeRunner
         probe_runner = ProbeRunner(model, tok, device, chat=True,
                                    seed=args.seed, preamble=DEFAULT_PREAMBLE,
-                                   facts_per_family=8)
+                                   facts_per_family=8, verbatim_per_file=1)
         print(f"probes: chat forms every {args.probe_every} steps")
 
     emit(metrics_f, event="start", step=start_step, kind="rlvr-grpo", preset=preset,

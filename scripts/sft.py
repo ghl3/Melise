@@ -311,9 +311,13 @@ def main() -> None:
     probe_runner, probe_round = None, 0
     if args.probe_every > 0:
         from transformer.probes import ProbeRunner
+        # Trimmed in-loop battery (see pretrain.py) — the chat forms run
+        # ~2× the raw round's 266 s, and SFT is the stage where the
+        # probes matter most (identity destruction happens HERE), so the
+        # budget is spent on cadence, not battery width.
         probe_runner = ProbeRunner(model, tok, device, chat=True,
                                    seed=args.seed, preamble=DEFAULT_PREAMBLE,
-                                   facts_per_family=8)
+                                   facts_per_family=8, verbatim_per_file=1)
         print(f"probes: chat forms every {args.probe_every} steps")
     print(f"training from step {start_step + 1} to {args.steps} "
           f"(batch={args.batch_size}, seq_len={args.seq_len}, lr={args.lr})\n")
