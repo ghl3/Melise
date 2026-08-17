@@ -299,6 +299,37 @@ def test_data_mix_groups():
         shutil.rmtree(tmp)
 
 
+def test_probes_scoring():
+    """Probe scorers and the facts table: deterministic split, schema,
+    word-boundary matching, echo exclusion."""
+    from transformer.probes import (HELDOUT_NAMES, contains_any, fact_split,
+                                    load_facts, novel_names, prefix_any,
+                                    similarity)
+    from transformer.rl.tasks import _NAMES
+
+    facts = load_facts()
+    assert len(facts) >= 50
+    families = {f["family"] for f in facts}
+    assert families >= {"instances", "capitals", "attributes", "counts",
+                        "opposites", "membership"}
+    splits = {f["split"] for f in facts}
+    assert splits == {"train", "heldout"}
+    assert all(fact_split(f["id"]) == f["split"] for f in facts)
+
+    assert contains_any("I think it is Paris!", ["paris"])
+    assert not contains_any("A capital is on the capital.", ["paris"])
+    assert not contains_any("category", ["cat"])          # word boundary
+    assert not contains_any("Name an animal", ["dog"])    # echo scores 0
+    assert prefix_any("Yes, of course.", ["yes"])
+    assert not prefix_any("I would say yes.", ["yes"])
+    assert similarity("abcdef", "abcdef") == 1.0
+    assert similarity("abcdef", "zzzzzz") < 0.2
+
+    assert not set(HELDOUT_NAMES) & set(_NAMES)
+    nn = novel_names(7)
+    assert nn == novel_names(7) and not set(nn) & set(_NAMES)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

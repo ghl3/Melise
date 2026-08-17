@@ -162,6 +162,36 @@ like the name:
 (1k steps ≈ 40 min training) ≈ 2–3% overhead. Dump rotation keeps the
 sample cadence at gen-3's cost.
 
+## STATUS 2026-08-17: core implemented + first results
+
+`transformer/probes.py` (facts/identity/date/verbatim/dumps, both
+surface forms), `configs/facts.json` (61-entry starter table),
+`scripts/probe_checkpoint.py`, scoring unit tests. Not yet: in-loop
+wiring, corpus generators (facts/identity v2), context_recall RLVR
+task, chat-wrapped verbatim variant.
+
+First run (--quick) on gen-3's pretrain best vs rlvr best:
+
+| probe | pretrain (raw) | rlvr (chat) |
+|---|---|---|
+| identity/pool | 1.00 | 1.00 |
+| identity/heldout | 0.67 | 0.00 |
+| **identity/novel** | **0.67** | **0.00** |
+| facts/instances | 0.67 (cloze) | 0.00 |
+| facts (all other families) | 0.00 | 0.00 |
+| date/retrieval | 0.00 | 0.00 (honesty 1.00) |
+| verbatim trained vs heldout | ≈0.26 vs 0.31 | ≈0.17 vs 0.19 |
+
+**Headline: post-training DESTROYED novel-name induction.** The base
+model copies unseen names from context 2/3; the chat model 0/3 — the
+24-name identity corpus taught answering-from-the-pool over
+copying-from-context. Identity corpus v2 is therefore capability
+PRESERVATION, not just enforcement. Same shape on instances: weak
+content exists in the base (cloze 0.67) that chat access loses.
+Verbatim gap ≈ 0 everywhere (heldout even scores higher) — zero
+verbatim memorization, confirming the sonnet probe. (--quick n=3/fam;
+full-table runs will firm the numbers.)
+
 ## Implementation order (inter-generation window)
 
 1. `transformer/probes.py` + scorers (Levenshtein via difflib ratio —
