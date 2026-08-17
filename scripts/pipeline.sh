@@ -46,10 +46,9 @@ PT_KEEP_EVERY="${PT_KEEP_EVERY:-25000}"   # milestone checkpoints exempt from pr
 PROBE_EVERY="${PROBE_EVERY:-4000}"        # pretrain probe cadence. MEASURED: ~4 min/round on the L4
                                           # (trimmed battery) -> 67 rounds ~= 2% of a ~10d pretrain
 DATA_MIX="${DATA_MIX:-configs/mix-gen4-chat.json}"
-SFT_STEPS="${SFT_STEPS:-20000}"
-SFT_BATCH="${SFT_BATCH:-5}"         # SFT carries no resident GPU corpus (~2 GB lighter than pretrain),
-                                    # so b5 may fit where pretrain b4 is the cap — TOY-VALIDATE; if it
-                                    # OOMs use SFT_BATCH=4 SFT_STEPS=25000 (same examples as gen-3)
+SFT_STEPS="${SFT_STEPS:-25000}"     # 25k x b4 = gen-3's example exposure (20k x b5)
+SFT_BATCH="${SFT_BATCH:-4}"         # PROBED 2026-08-17: b5 OOMs in SFT's first backward even without
+                                    # a resident corpus — b5 activations outweigh the 2 GB saved. b4.
 SFT_SEQ="${SFT_SEQ:-2048}"
 SFT_EVAL_EVERY="${SFT_EVAL_EVERY:-200}"  # best.pt only lands at evals — keep < SFT_STEPS
 SFT_PROBE_EVERY="${SFT_PROBE_EVERY:-2500}"  # chat rounds ~2x raw; 8 rounds ~= 4-5% of SFT — the stage
@@ -146,8 +145,9 @@ else
         --probe-every "$PROBE_EVERY" \
         --device "$DEVICE" > ~/pretrain_run.log 2>&1
 fi
+RC=$?
 PT_DIR=$(newest pretrain)
-say "pretrain exit $? ($PT_DIR)"
+say "pretrain exit $RC ($PT_DIR)"
 [ -e "$PT_DIR/best.pt" ] || { say "no pretrain best.pt — aborting"; exit 1; }
 PT_RUN=$(basename "$PT_DIR")
 
@@ -168,8 +168,9 @@ else
         --replay-frac "$SFT_REPLAY_FRAC" --replay-mix "$SFT_REPLAY_MIX" \
         --probe-every "$SFT_PROBE_EVERY" --device "$DEVICE" > ~/sft_run.log 2>&1
 fi
+RC=$?
 SFT_DIR=$(newest sft)
-say "sft exit $? ($SFT_DIR)"
+say "sft exit $RC ($SFT_DIR)"
 [ -e "$SFT_DIR/best.pt" ] || { say "no sft best.pt — aborting"; exit 1; }
 chain_ok "$SFT_DIR" "$PT_RUN" || { say "sft dir $SFT_DIR does not chain to $PT_RUN — aborting"; exit 1; }
 
@@ -216,8 +217,9 @@ else
         --lr "$RLVR_LR" --probe-every "$RLVR_PROBE_EVERY" \
         --device "$DEVICE" > ~/grpo_run.log 2>&1
 fi
+RC=$?
 RLVR_DIR=$(newest rlvr)
-say "grpo exit $? ($RLVR_DIR)"
+say "grpo exit $RC ($RLVR_DIR)"
 
 # ---- Post-stage evals: virgin test-slice bpb for every stage's best ----
 # (catastrophic-forgetting check: did SFT/RLVR damage the base LM?)
