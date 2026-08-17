@@ -1,4 +1,4 @@
-# Gen-4 — medium-wide (IN PREP — freeze pending hardware probe)
+# Gen-4 — medium-wide (RECIPE FROZEN 2026-08-17 — probed, toy-validated, launch-ready)
 
 The capacity-and-content generation: 2.26× the params (3× the routed
 storage) on ~1.5× the tokens, aimed squarely at gen-3's three measured
@@ -24,21 +24,61 @@ SFT and GRPO.
 | pretrain | **268,500 steps × b4 × 2048 ≈ 2.2B tokens** (13.5 tok/total-param, 28.1 tok/active) | Chinchilla band for MoE is 1.6–3.3B. **b4 PROBED AND FROZEN 2026-08-17**: b5 OOM'd on step 1 (AttnRes forward pass hit 21.6 GiB before the first optimizer step — the int16 headroom wasn't enough against d=512 activations; the margin rule ≤21.5 GiB fails categorically). Batch and steps freeze TOGETHER — b5 with the b4 step count would silently train 2.75B |
 | LR | **2.5e-4 peak, WSD** (warmup 1%, hold, linear decay over final 15%) | gen-3 measured decay AMPLIFYING eviction — when to pay that cost is now an explicit choice; extending mid-hold needs no schedule surgery. Peak scaled mildly from 3e-4 at d=384 |
 | data mix | `configs/mix-gen4-chat.json` — grouped: fineweb 44% (2GB, all-dump shuffle), wikitext 16%, books 15% (45 works), code 8%, **dialogue 7%** (4 corpora), enwik8 5%, math 4%, reference 1% | shares are the knob, not file sizes; books drop ~28 → ~20 effective epochs; dialogue = product register, grew via PersonaChat+BST (+15MB) |
-| SFT | 20,000 × b4, **+3% pretrain replay** (`--replay-frac 0.03 --replay-mix <DATA_MIX>`) | replay anchors the base LM (gen-3: +0.74 bpb forgetting, novel-name induction destroyed). chat_facts.txt + identity v2 corpora join via the chat_* glob |
+| SFT | **25,000 × b4** (b5 OOMs in the first backward — probed), **+3% pretrain replay** (`--replay-frac 0.03 --replay-mix <DATA_MIX>`) | 25k×b4 = gen-3's example exposure (20k×b5). Replay anchors the base LM (gen-3: +0.74 bpb forgetting, novel-name induction destroyed). chat_facts.txt + identity v2 corpora join via the chat_* glob |
 | SFT tail | 1,500 @ lr 3e-5 on tasks+identity+**facts** | generative access to the formats (gen-2 lesson), now incl. facts |
 | GRPO | 600 steps, lr 1e-5, headroom-weighted; **+context_recall, +facts** families | context_recall carries per-task randomized preambles (name/date/refusal); facts scores the train split of the 298-entry table |
 | eval | deterministic **fixed-window** per-domain eval (16 pinned windows/domain), acc/top-5/entropy triples, byte-weighted `val_group/*`, **best.pt = min trailing-3 val_bpb** | kills the ±0.04 draw noise that held best.pt stale 53k steps; decomposes bpb moves live |
-| probes | `probe/*` every 2,000 pretrain steps (raw forms) / 800 SFT / 100 GRPO steps (chat forms) + rotating dump battery, greedy+t0.8 | gen-3's blind spots, instrumented; full battery offline on keepers |
+| probes | `probe/*` every 4,000 pretrain steps (raw) / 2,500 SFT / 200 GRPO steps (chat) + rotating dump battery, greedy+t0.8; in-loop battery trimmed to 1 verbatim window/file | **measured 266 s/round on the L4** → ~2% of pretrain, ~4–5% of SFT (the stage that matters most); full battery offline on keepers |
 | checkpoints | save 1,000, keep-last 5, **keeper every 25,000** (pruning-exempt) | ~2 GB each at 163M; keepers buy post-hoc science (gen-3's floor-era ckpt was pruned) |
 | cadence | PT_EVAL_EVERY=500 (~15 min at 2.2k tok/s) | 250 would double evals on a 270k-step run for nothing |
 
-Est. wall-clock at b4: pretrain ~11.6d + SFT ~21h + tail ~1.5h +
-GRPO ~10h ≈ **~13 days on-demand** (~$270); the b4 probe's measured
-tok/s firms this. (b5 would have saved ~2 days; it OOM'd at step 1 —
-see the recipe row.) Zero preemptions expected; restarter stays
-PAUSED (boot-resume crontab covers host errors via automaticRestart).
+Wall-clock from MEASURED throughput (~2,500 tok/s steady at b4):
+pretrain ~10.2d + SFT ~24h + tail ~1.5h + GRPO ~12h + evals/probes
+~1h ≈ **~12 days on-demand** (~$245). Zero preemptions expected;
+restarter stays PAUSED (boot-resume crontab covers host errors via
+automaticRestart).
 
-## Pre-launch gates (ordered)
+## Probe + validation results (2026-08-17 VM session)
+
+- **b5 pretrain: OOM step 1** (AttnRes forward, 21.6 GiB before the
+  optimizer existed). **b4: OOM step 2** — until pretrain corpora
+  moved CPU-resident (2.1 GiB freed; ~130 KB/batch H2D, negligible).
+  Then **b4 passed 1,000 steps** incl. 4 fixed-window evals + 2 probe
+  rounds: 2,500–2,830 tok/s, grad_norm 0.61–1.41 at 2.5e-4 (stable),
+  val_bpb 2.30 → 1.93, all 8 domain + 4 group curves descending,
+  moe_max_load ~0.06–0.07 at 40 experts (mild, no collapse).
+- **SFT b5: OOM in the first backward** even without a resident
+  corpus → SFT frozen at b4 × 25,000.
+- **GRPO memory: 10.9 GiB peak** at production rollout shape —
+  pretrain, not GRPO, is gen-4's memory high-water mark (inverted
+  from gen-3). All 8 task families ran in CUDA rollouts.
+- **Toy full pipeline: PIPELINE_DONE** — post-only reuse, SFT b4
+  (replay + chat probes live), tail, GRPO (probes live), enwik8
+  evals, BOTH holdout books, full offline probe battery ×3
+  checkpoints, evals.jsonl + probes.jsonl self-pushed to the bucket.
+- **chain_ok refusal test: PASS** — with gen-3's sft dir planted as
+  newest, `--resume` said "fresh sft from <current pretrain>",
+  refusing the foreign dir (the gen-3 incident, prevented live).
+- Hardening found by validation: sft.py runs shorter than eval-every
+  now still write best.pt; pipeline stage exit codes were read from
+  `newest()` instead of the stage (a crashed stage printed "exit 0")
+  — both fixed.
+- Toy dirs deleted, local AND bucket (verified zero remain). Git
+  bundle refreshed to gs://…/repo/. Cross-gen probe baselines
+  (gen-2 + gen-3, full battery) run post-validation.
+
+## Pre-launch gates (ALL CLEARED 2026-08-17 except the two marked)
+
+Status: 1 ✓ (probe results above; disk 119G free, gen-3 dirs kept for
+post-run analyses; bundle refreshed), 2 ✓ (fineweb 2.0 GB / 93 dumps
+in bucket; token cache pre-warmed by the probe run), 3 ✓ (corpora
+regenerated + uploaded; NOTE: skipped the formal 500-conversation
+sample_data.py audit — generators are self-checked, but run it if
+paranoid), 4 ✓ (baselines running post-validation), 5 ✓ (toy PASS +
+chain_ok refusal test + toy dirs deleted local+bucket), 6 — NOT done
+(quota/invoice recheck; informational only, launch is on-demand).
+
+Original gate definitions kept below for the record.
 
 1. **VM hardware probe (~2h, decides the freeze):**
    - `df -h` FIRST; archive/delete gen-3's local run dirs (bucket has

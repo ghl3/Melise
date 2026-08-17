@@ -533,3 +533,66 @@ GPU if serve traffic ever shows dropped turns. Probe gate also
 gained: VM disk check (gen-3 run dirs archived off disk first),
 probe-cost contingency order (raise SFT_PROBE_EVERY, then trim
 verbatim), git-bundle refresh. Commits 23c9258 + e0251ec.
+
+## 2026-08-17 (night) — Gen-4 probe session: recipe frozen at b4, toy pipeline green, launch-ready
+
+**Goal.** Exercise every part of the gen-4 run on the VM before
+committing 12 days to it: memory/throughput at the exact config, LR
+stability, probe cost, GRPO memory, the full toy pipeline, and the
+chain-guard incident test. Freeze the recipe on measured numbers.
+
+**Setup.** VM up after a 19-min L4 stockout (retry loop); gen-3's
+stale boot-resume crontab defused ~35 s after boot. Code
+checksum-synced at 0d46706-era; 2 GB fineweb + all new corpora pulled;
+disk 119 G free (gen-3 dirs kept for post-run analyses).
+
+**Results.**
+- **b5 pretrain OOM'd on step 1** (AttnRes forward, 21.6 GiB before
+  optimizer state existed). **b4 OOM'd on step 2** — the moment Adam's
+  1.3 GB materialized. Fix: pretrain corpora now CPU-resident (the
+  GPU never needed them — ~130 KB per-batch copies; 2.1 GiB freed).
+  After the fix **b4 passed 1,000 steps clean**: 2,500–2,830 tok/s,
+  grad_norm 0.61–1.41 at 2.5e-4 peak (WSD), val_bpb 2.30→1.93,
+  all domain/group curves descending, moe_max_load 0.06–0.07 at 40
+  experts. **Recipe frozen: PT b4 × 268,500.**
+- **SFT b5 OOM'd in its first backward** (no resident corpus — b5
+  activations outweigh the 2 GB saved). **SFT frozen: b4 × 25,000**
+  (gen-3's example exposure).
+- **GRPO peak 10.9 GiB** at production rollout shape — pretrain is
+  now the memory high-water mark, inverting gen-3's rule of thumb.
+- **Probe round: 266 s on CUDA** (untrained model = worst case).
+  Cadences retuned 2000→4000 / 800→2500 / 100→200 + in-loop verbatim
+  1/file: ~2% of pretrain, ~4–5% of SFT.
+- **Toy full pipeline: PIPELINE_DONE** — post-only reuse, SFT b4 with
+  replay + chat probes, tail, GRPO with all 8 task families, enwik8
+  evals, both holdout books, full offline probe battery ×3, artifacts
+  self-pushed to the bucket. **chain_ok refusal test passed**: gen-3's
+  sft dir planted as newest → --resume started a fresh SFT from the
+  current pretrain instead of trusting it.
+- Wall-clock from measured tok/s: **~12 days, ~$245** end-to-end.
+
+**Learnings.**
+1. "Probe memory at full shape" (gen-2's lesson) earned its keep
+   twice in one evening: THREE separate OOMs (pretrain b5, pretrain
+   b4-with-resident-corpus, SFT b5) that would each have been a
+   launch-day incident, all caught in ~$5 of GPU time.
+2. Resident-corpus-on-GPU was a silent architecture tax nobody had
+   re-examined since the 17M era — at 163M it was the difference
+   between fitting and not. Assumptions scale worse than models.
+3. Toy validation caught two more real defects: short runs (< one
+   eval interval) produced no best.pt and aborted the chain (sft.py
+   now falls back to the final checkpoint), and stage exit codes were
+   read from the `newest()` call, so a crashed SFT logged "exit 0".
+   Every toy-validation round so far (gen-3's and both of gen-4's)
+   has found real bugs — the ritual stays.
+4. The pkill-over-ssh footgun bit AGAIN despite the bracket trick
+   (the launch text "pipeline.sh" in the same command line matched) —
+   keep kill commands in a separate ssh from anything naming the
+   scripts.
+
+**Next steps.** Cross-gen probe baselines finishing on the VM
+(gen-2 + gen-3, full battery → probes.jsonl in the bucket). Then the
+user's launch call: VM is RUNNING, warm, and clean — launch is the
+env block in gen4-medium-wide.md + boot-resume install + verification.
+Non-blocking afterwards: gen-3 run-doc Results fill, chat battery,
+routing map / eviction anatomy / lm_head SVD on the idle GPU windows.
