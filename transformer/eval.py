@@ -71,6 +71,7 @@ def fixed_window_eval(model, val_datasets, val_paths, pinned, seq_len: int,
     — deterministic, so best.pt selection sees zero draw noise."""
     was_training = model.training
     model.eval()
+    dev = next(model.parameters()).device
     try:
         domains: dict[str, dict[str, float]] = {}
         for path, vd, starts in zip(val_paths, val_datasets, pinned):
@@ -79,9 +80,12 @@ def fixed_window_eval(model, val_datasets, val_paths, pinned, seq_len: int,
             nll = n_tok = n_bytes = top1 = top5 = ent_bits = 0.0
             for lo in range(0, len(starts), batch_size):
                 chunk = starts[lo:lo + batch_size]
-                inputs = torch.stack([vd[s:s + seq_len] for s in chunk]).long()
+                # Windows gather on the corpus's device (CPU for gen-4 —
+                # see pretrain.py) and move to the model's.
+                inputs = torch.stack(
+                    [vd[s:s + seq_len] for s in chunk]).long().to(dev)
                 targets = torch.stack(
-                    [vd[s + 1:s + 1 + seq_len] for s in chunk]).long()
+                    [vd[s + 1:s + 1 + seq_len] for s in chunk]).long().to(dev)
                 logits = model(inputs)
                 lsm = F.log_softmax(logits.float(), dim=-1)
                 nll -= float(lsm.gather(-1, targets.unsqueeze(-1)).sum())

@@ -480,8 +480,13 @@ def main() -> None:
         # Legacy --data path: hold out the last val_frac of every file.
         splits = {p: (1.0 - args.val_frac, args.val_frac) for p in args.data}
 
+    # Corpora live on CPU; each batch is a ~130 KB host->device copy
+    # (negligible vs a multi-second step). GPU-resident corpora cost
+    # 2.1 GiB at gen-4 scale — measured 2026-08-17 as the difference
+    # between b4 fitting and OOMing at step 2 (once Adam moments
+    # materialized) on the 22 GiB L4.
     train_data, val_data, val_bytes, val_paths, byte_counts = load_data(
-        args.data, device, splits, tok=tok)
+        args.data, torch.device("cpu"), splits, tok=tok)
     if mix_mults is not None:
         weights = torch.tensor([b * m for b, m in zip(byte_counts, mix_mults)])
     else:
@@ -616,6 +621,7 @@ def main() -> None:
             inputs, targets = get_batch(
                 train_data, weights, args.batch_size, args.seq_len
             )
+            inputs, targets = inputs.to(device), targets.to(device)
             logits = model(inputs)
             loss = F.cross_entropy(logits.view(-1, cfg.vocab_size), targets.view(-1))
 
