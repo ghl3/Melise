@@ -33,8 +33,9 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 PRESET="${PRESET:-kimi3-medium-wide}"
 TOKENIZER="${TOKENIZER:-bpe8k}"
 DEVICE="${DEVICE:-cuda}"
-PT_STEPS="${PT_STEPS:-268500}"      # 2.2B tokens at batch 4 x seq 2048 — recompute if the probe clears b5
-PT_BATCH="${PT_BATCH:-4}"           # d=512/40exp expected fit; PROBE BEFORE LAUNCH (gen-3 medium: b5 @ 20.1 GiB)
+PT_STEPS="${PT_STEPS:-215000}"      # 2.2B tokens at batch 5 x seq 2048. BATCH AND STEPS FREEZE TOGETHER:
+PT_BATCH="${PT_BATCH:-5}"           # b5 assumes the int16-corpus headroom — the probe must confirm peak
+                                    # <= ~21.5 GiB or fall back to PT_BATCH=4 PT_STEPS=268500 (same 2.2B)
 PT_SEQ="${PT_SEQ:-2048}"
 PT_LR="${PT_LR:-2.5e-4}"            # mild width-aware reduction from gen-3's 3e-4 at d=384
 PT_LR_SCHEDULE="${PT_LR_SCHEDULE:-wsd}"   # hold at peak, linear decay over the final PT_DECAY_FRAC
@@ -44,7 +45,7 @@ PT_KEEP_EVERY="${PT_KEEP_EVERY:-25000}"   # milestone checkpoints exempt from pr
 PROBE_EVERY="${PROBE_EVERY:-2000}"        # pretrain probe cadence (steps); ~4x eval cadence
 DATA_MIX="${DATA_MIX:-configs/mix-gen4-chat.json}"
 SFT_STEPS="${SFT_STEPS:-20000}"
-SFT_BATCH="${SFT_BATCH:-4}"
+SFT_BATCH="${SFT_BATCH:-5}"         # no resident GPU corpus in SFT — fits wherever pretrain b5 fits
 SFT_SEQ="${SFT_SEQ:-2048}"
 SFT_EVAL_EVERY="${SFT_EVAL_EVERY:-200}"  # best.pt only lands at evals — keep < SFT_STEPS
 SFT_PROBE_EVERY="${SFT_PROBE_EVERY:-800}"

@@ -21,7 +21,7 @@ SFT and GRPO.
 | model | **kimi3-medium-wide** — d=512, 3 blocks (13 attn layers), 16 heads (head_dim 32), **40 experts** top-4, K3 shape rules | **163.2M total / 78.3M active** (counted; test-pinned). Routed pool 94.4M = 3× gen-3's — targets FFN storage, where eviction and facts live, at only 1.72× active compute |
 | tokenizer | bpe8k (unchanged) | bpe16k stays deferred (gen-5, width now banked) |
 | context | 2048 | unchanged |
-| pretrain | **~268,500 steps × b4 × 2048 ≈ 2.2B tokens** (13.5 tok/total-param, 28.1 tok/active) | Chinchilla band for MoE is 1.6–3.3B; 2.2B ≈ 13d on-demand. **b4 assumed — probe may clear b5** (then ~215k steps; corpus tensors now int16, ~2 GB saved on-device) |
+| pretrain | **~215,000 steps × b5 × 2048 ≈ 2.2B tokens** (13.5 tok/total-param, 28.1 tok/active) | Chinchilla band for MoE is 1.6–3.3B. **b5 is the plan** (decided 2026-08-18): int16 corpora freed ~2 GB and b5 buys ~2 days of wall-clock — but the probe must CONFIRM it (peak ≤ ~21.5 GiB, the margin gen-3 ran at). Fallback: b4 + 268,500 steps, same 2.2B. Batch and steps freeze TOGETHER — b5 with the b4 step count would silently train 2.75B |
 | LR | **2.5e-4 peak, WSD** (warmup 1%, hold, linear decay over final 15%) | gen-3 measured decay AMPLIFYING eviction — when to pay that cost is now an explicit choice; extending mid-hold needs no schedule surgery. Peak scaled mildly from 3e-4 at d=384 |
 | data mix | `configs/mix-gen4-chat.json` — grouped: fineweb 44% (2GB, all-dump shuffle), wikitext 16%, books 15% (45 works), code 8%, **dialogue 7%** (4 corpora), enwik8 5%, math 4%, reference 1% | shares are the knob, not file sizes; books drop ~28 → ~20 effective epochs; dialogue = product register, grew via PersonaChat+BST (+15MB) |
 | SFT | 20,000 × b4, **+3% pretrain replay** (`--replay-frac 0.03 --replay-mix <DATA_MIX>`) | replay anchors the base LM (gen-3: +0.74 bpb forgetting, novel-name induction destroyed). chat_facts.txt + identity v2 corpora join via the chat_* glob |
@@ -32,21 +32,33 @@ SFT and GRPO.
 | checkpoints | save 1,000, keep-last 5, **keeper every 25,000** (pruning-exempt) | ~2 GB each at 163M; keepers buy post-hoc science (gen-3's floor-era ckpt was pruned) |
 | cadence | PT_EVAL_EVERY=500 (~15 min at 2.2k tok/s) | 250 would double evals on a 270k-step run for nothing |
 
-Est. wall-clock: pretrain ~11.6d + SFT ~21h + tail ~1.5h + GRPO ~10h ≈
-**~13 days on-demand** (~$270). Zero preemptions expected; restarter
-stays PAUSED (boot-resume crontab covers host errors via
+Est. wall-clock at b5: pretrain ~9.5–10d + SFT ~21h + tail ~1.5h +
+GRPO ~10h ≈ **~11 days on-demand** (~$225); the probe's measured tok/s
+firms this. Fallback b4 ≈ ~13d (~$270). Zero preemptions expected;
+restarter stays PAUSED (boot-resume crontab covers host errors via
 automaticRestart).
 
 ## Pre-launch gates (ordered)
 
-1. **VM hardware probe (~1h, decides the freeze):** 30-step pretrain of
-   the exact preset at b4 and b5 → real tok/s + peak GiB; a toy GRPO
-   step at the new size (GRPO is the memory high-water mark — policy +
-   frozen reference + rollout caches; `--update-microbatch` may need
-   lowering); **one probe round timed on CUDA** (budget ≤3% of
-   wall-clock — adjust PROBE_EVERY/SFT_PROBE_EVERY if over; the MPS
-   smoke ran minutes/round, CUDA should be ~10× faster, verify).
-   Then freeze PT_STEPS to hit 2.2B at the probed batch.
+1. **VM hardware probe (~2h, decides the freeze):**
+   - `df -h` FIRST; archive/delete gen-3's local run dirs (bucket has
+     them) — the run needs ~35 GB+ (2 GB fineweb + ~2 GB token cache
+     + keep-last 5 × 2 GB + ~9 keepers).
+   - **Pretrain at b5** (the plan): 30 steps for peak GiB + tok/s,
+     then a **500–1,000-step LR-stability segment** at 2.5e-4 —
+     grad_norm/loss-spike check, first look at moe/* balance at
+     top-4-of-40, and an early loss curve vs gen-3's at the same
+     token count. **Adopt b5 + PT_STEPS=215000 only if peak ≤
+     ~21.5 GiB and the segment is clean**; else b4 + 268500. Also
+     measure b4 tok/s for the record.
+   - Toy GRPO step at the new size (GRPO is the memory high-water
+     mark — policy + frozen reference + rollout caches;
+     `--update-microbatch` may need lowering).
+   - **One probe round timed on CUDA** (budget ≤3% of wall-clock).
+     If over: raise SFT_PROBE_EVERY first, trim verbatim_per_file
+     second (battery sizes are hardcoded in the three loops — edit
+     BEFORE launch, nothing changes mid-run).
+   - Refresh the repo git bundle in the bucket while the VM is up.
 2. **fineweb 2GB fetch** (`prep_fineweb.py`, laptop, hours) →
    `add_dataset.py` upload → VM `download_data.py` → pre-warm the bpe8k
    token cache (first mix load tokenizes ~2.9GB — let it run before
@@ -75,9 +87,14 @@ recipe now, but pass everything explicitly anyway):
     DONE_CMD="sudo shutdown -h +2" \
     PRESET=kimi3-medium-wide TOKENIZER=bpe8k \
     DATA_MIX=configs/mix-gen4-chat.json \
-    PT_STEPS=268500 PT_BATCH=4 PT_LR=2.5e-4 PT_LR_SCHEDULE=wsd \
-    SFT_BATCH=4 SFT_STEPS=20000 \
+    PT_STEPS=215000 PT_BATCH=5 PT_LR=2.5e-4 PT_LR_SCHEDULE=wsd \
+    SFT_BATCH=5 SFT_STEPS=20000 \
     nohup bash scripts/pipeline.sh > ~/pipeline_nohup.log 2>&1 &
+
+(batch/steps pair per the probe verdict: b5/215000 or b4/268500 —
+never mix them.) WSD note: decay starts at 85% of PT_STEPS; review
+the curves at ~80% — decaying early (relaunch-with-lower---steps +
+--resume) is a legitimate ship-sooner choice, not an accident.
 
 (NOTE: DONE_CMD is shutdown-only now — the VM-side scheduler pause
 never worked, scopes; keep the restarter paused from the laptop.)

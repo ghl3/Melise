@@ -200,6 +200,34 @@ L4 constraints to re-probe for any change: gen-3 medium ran b5 @
   keep a sparse milestone checkpoint every ~25k steps exempt from
   pruning (few GB in the bucket buys post-hoc science).
 
+### 3b. Context length (raised 2026-08-18 — decided: keep 2048)
+
+Gen-3 carried ctx 2048 with a one-line rationale ("chat needs no
+more; memory feeds batch"). Full reasoning, now that it's been asked:
+
+- **Nothing measured implicates the window.** Gen-3's failures are
+  storage failures (facts, eviction, name-copying); the recall
+  suspect was KDA's fixed 32×32/head state, not window length. Chat
+  sessions rarely exceed 2048 tokens (~6 KB of text); serve degrades
+  gracefully by dropping oldest turns.
+- **Memory and FLOPs trade directly against the capacity bet.** The
+  int16 headroom was just spent on b5 (throughput). Doubling ctx
+  would claw that back (fewer sequences per batch, bigger activations)
+  and the 4 MLA layers pay O(L²) — wall-clock up ~10–20% for a
+  benefit no metric asks for.
+- **The option stays open almost for free.** NoPE + KDA make context
+  a fine-tune-time property, not a pretrain commitment: gen-1
+  measured 256→1024 SFT extension working cleanly with a strict
+  state-dict load. If the chat product ever hits the 2048 wall, a
+  gen-4.5 SFT at 4096 is ~a day of GPU, not a rerun.
+- **Eval continuity**: test bpb is computed in seq-len windows;
+  changing ctx would quietly improve bpb through longer conditioning
+  and muddy the one cross-generation number.
+
+Revisit trigger: dropped_turns showing up in real serve traffic, or a
+long-context capability goal (documents, not chat). Then extend at
+SFT time, and consider it properly for gen-5 alongside bpe16k.
+
 ### 4. Tokenizer
 
 bpe16k — **deferred by user decision, do not start.** Trade: fewer
