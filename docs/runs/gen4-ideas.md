@@ -349,6 +349,17 @@ Gen-4 fixes:
 - [ ] DONE_CMD: pause-from-VM can never work with current scopes —
       drop it (leave restarter paused on-demand; automaticRestart
       covers host errors) or move the pause laptop-side.
+- [ ] evals.jsonl never syncs: BucketSync's last kick fires at the
+      final training save, BEFORE offline evals append. Fix: have
+      the eval stage (or eval_checkpoint.py itself) push evals.jsonl
+      to the run's bucket mirror after writing. (Retrieved manually
+      2026-08-17 through a stockout window.)
+- [ ] SFT forgetting is large: enwik8 test bpb 1.096 (pretrain best)
+      → 1.84 after chat-only SFT (+0.74; GRPO adds ~nothing).
+      Expected direction, notable size. Gen-4 option: replay a small
+      pretrain-mix fraction (2–5%) inside SFT batches to anchor the
+      base distribution — cheap, standard, measurable via the same
+      eval.
 
 ## Blocked on gen-3 completion — revisit each after
 
