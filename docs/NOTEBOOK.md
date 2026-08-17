@@ -519,3 +519,17 @@ anatomy, lm_head SVD) on the idle GPU. (3) Toy full-pipeline
 validation incl. planted-stale-dir refusal → DELETE toy dirs →
 launch. Non-blocking gen-3 ritual: run-doc Results fill, chat battery
 vs gen-2.
+
+*Addendum (same day, after review):* fineweb 2.0 GB / 93 dumps
+uploaded and registered. Recipe review closed two questions: (a)
+**batch → b5/215k steps** as the plan (int16 headroom + ~2 days of
+wall-clock; probe must confirm peak ≤ ~21.5 GiB and a clean
+500–1,000-step LR-stability segment at 2.5e-4, else b4/268.5k —
+batch and steps freeze together); (b) **ctx stays 2048** — no
+measured failure implicates the window, memory is spent on batch,
+and NoPE+KDA make context an SFT-time property (gen-1 measured
+256→1024 extension clean), so the option stays open for ~a day of
+GPU if serve traffic ever shows dropped turns. Probe gate also
+gained: VM disk check (gen-3 run dirs archived off disk first),
+probe-cost contingency order (raise SFT_PROBE_EVERY, then trim
+verbatim), git-bundle refresh. Commits 23c9258 + e0251ec.

@@ -200,7 +200,7 @@ L4 constraints to re-probe for any change: gen-3 medium ran b5 @
   keep a sparse milestone checkpoint every ~25k steps exempt from
   pruning (few GB in the bucket buys post-hoc science).
 
-### 3b. Context length (raised 2026-08-18 — decided: keep 2048)
+### 3b. Context length (raised 2026-08-17 — decided: keep 2048)
 
 Gen-3 carried ctx 2048 with a one-line rationale ("chat needs no
 more; memory feeds batch"). Full reasoning, now that it's been asked:
