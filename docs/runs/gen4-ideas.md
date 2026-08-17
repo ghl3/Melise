@@ -189,6 +189,12 @@ L4 constraints to re-probe for any change: gen-3 medium ran b5 @
   common), for best.pt (126.5k) vs final — does the decay-phase climb
   come from rank loss or from sharpened-but-generic mass (confidence
   misallocation)? Prediction: mostly the latter.
+  Supporting probe (2026-08-17, laptop): pretrain best.pt cannot
+  recite Sonnet 18 even given a 2-line verbatim key at t=0 — emits
+  metrically-correct invented verse instead. ~28 effective epochs
+  stored register, not strings. Expect the memorization gap to be
+  SMALL; "name an animal"-type instance retrieval fails in chat for
+  the same form-over-content reason.
 - **Keeper checkpoints**: gen-3's pruning left no floor-era (~52k)
   checkpoint, killing the clean before/after eviction diff. Gen-4:
   keep a sparse milestone checkpoint every ~25k steps exempt from
