@@ -128,13 +128,12 @@ recipe now, but pass everything explicitly anyway):
     PRESET=kimi3-medium-wide TOKENIZER=bpe8k \
     DATA_MIX=configs/mix-gen4-chat.json \
     PT_STEPS=268500 PT_BATCH=4 PT_LR=2.5e-4 PT_LR_SCHEDULE=wsd \
-    SFT_BATCH=5 SFT_STEPS=20000 \
+    SFT_BATCH=4 SFT_STEPS=25000 \
     nohup bash scripts/pipeline.sh > ~/pipeline_nohup.log 2>&1 &
 
-(b4/268500 is the probed pair — never mix batches and step counts.
-SFT_BATCH=5 rides on SFT's ~2 GB-lighter footprint: toy-validated
-before launch; fallback SFT_BATCH=4 SFT_STEPS=25000.) WSD note: decay
-starts at 85% of PT_STEPS; review
+(b4/268500 and b4/25000 are the probed pairs — never mix batches and
+step counts. SFT b5 OOM'd in toy validation; 25k×b4 = gen-3's example
+exposure.) WSD note: decay starts at 85% of PT_STEPS; review
 the curves at ~80% — decaying early (relaunch-with-lower---steps +
 --resume) is a legitimate ship-sooner choice, not an accident.
 
