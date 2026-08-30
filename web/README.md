@@ -16,7 +16,10 @@ using `MODEL_SERVER_URL` / `MODEL_SERVER_TOKEN` from server-side env.
 
 ## Deploy
 
-Worker: see the root `Dockerfile` (Cloud Run, scale-to-zero). UI: Vercel
-with the project **root directory set to `web/`**; deploy with the
-`vercel` CLI (this repo has no git remote), and set `MODEL_SERVER_URL`
-to the Cloud Run URL plus a shared `MODEL_SERVER_TOKEN`/`SERVE_TOKEN`.
+Worker: see the root `Dockerfile` (Cloud Run, scale-to-zero) —
+`gcloud run deploy melise-worker --source .` from the repo root
+(flagless redeploys keep the service's env vars and resources). UI:
+Vercel with the project **root directory set to `web/`**; deploy with
+`vercel --prod` from `web/` (Vercel is not wired to the GitHub repo, so
+pushing alone does not deploy), and set `MODEL_SERVER_URL` to the Cloud
+Run URL plus a shared `MODEL_SERVER_TOKEN`/`SERVE_TOKEN`.

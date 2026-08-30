@@ -1,6 +1,11 @@
-# transformer-learning
+# Melise
 
-A proof-of-concept transformer language model on Apple Silicon. Two parts:
+A language model built entirely from scratch — tokenizer, architecture,
+training loops, RL harness, evals, and serving — small enough to train on
+a single rented GPU. The current generation (gen-4: a 163M-param
+Kimi-K3-style MoE, 78M active/token) is live at
+[meliseai.com](https://meliseai.com). The code grew out of a learning
+project and keeps that shape — two parts:
 
 - **`tutorial/`** — single-file, self-contained demos walking from "Hello GPU"
   through a full Mixtral-style MoE transformer. Each numbered file is a
@@ -111,6 +116,18 @@ Note: the kimi3 preset's KDA layers use fla's chunkwise Triton kernel on
 CUDA and fall back to a reference sequential scan elsewhere (MPS/CPU), so
 non-CUDA training speed drops with `--seq-len`; 128–256 is comfortable on
 MPS. Real SFT/GRPO runs belong on the CUDA VM.
+
+## Serving & chat UI
+
+The trained checkpoints serve through two pieces, deployed separately:
+
+- **Inference worker** — `scripts/serve.py` (FastAPI, SSE streaming,
+  bearer auth, per-IP rate limits, no-repeat-ngram loop breaker). Runs on
+  Cloud Run scale-to-zero via the root `Dockerfile`, which bakes staged
+  checkpoints from `serve_models/` into a CPU-only image.
+- **Web UI** — [`web/`](web/README.md): Next.js chat frontend on Vercel
+  (project root `web/`, deployed with the `vercel` CLI). Its API routes
+  proxy to the worker so the browser never sees the worker URL or token.
 
 ## Experiment notebook
 
