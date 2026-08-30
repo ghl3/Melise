@@ -57,6 +57,7 @@ DEVICE = "cpu"
 MAX_NEW_CAP = 512
 MAX_SECONDS = 120.0  # wall-clock cap per generation
 PREAMBLE = ""  # --preamble; only for models TRAINED with one (gen-3+)
+NO_REPEAT_NGRAM = 3  # --no-repeat-ngram; 0/1 disables
 _busy = threading.Semaphore(1)  # batch-1 server: one generation at a time
 
 
@@ -159,11 +160,25 @@ def generate(entry: dict, ids: list[int], max_new: int, temperature: float,
              top_k: int):
     """Yield token ids one at a time; stops after end_turn or max_new."""
     model, tok = entry["model"], entry["tok"]
+    out: list[int] = []
+    n = NO_REPEAT_NGRAM
     with torch.no_grad():
         x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
         cache = model.new_cache(1, DEVICE)
         logits = model(x, kv_cache=cache)[:, -1]
         for _ in range(max_new):
+            # Ban tokens that would repeat an n-gram already generated this
+            # turn: at this scale the model's repetition attractor is
+            # absorbing ("I'm afraid I'm afraid …" until the token cap), and
+            # banning the exact repeat is the only escape that works at every
+            # temperature, greedy included. Prompt tokens are exempt so
+            # "Repeat exactly: …" still copies verbatim.
+            if n > 1 and len(out) >= n - 1:
+                suffix = tuple(out[-(n - 1):])
+                banned = [out[i + n - 1] for i in range(len(out) - n + 1)
+                          if tuple(out[i:i + n - 1]) == suffix]
+                if banned:
+                    logits[:, banned] = -torch.inf
             if temperature <= 0:
                 tid = int(logits.argmax(dim=-1))
             else:
@@ -172,6 +187,7 @@ def generate(entry: dict, ids: list[int], max_new: int, temperature: float,
                     kth = torch.topk(scaled, min(top_k, scaled.shape[-1]))[0][:, -1]
                     scaled = scaled.masked_fill(scaled < kth, -torch.inf)
                 tid = int(torch.multinomial(F.softmax(scaled, dim=-1), 1))
+            out.append(tid)
             yield tid
             if tid == tok.end_turn_id:
                 return
@@ -341,11 +357,17 @@ def main():
                         "preambles (gen-4+). Default: $SERVE_PREAMBLE "
                         "(how the Cloud Run container sets it — the image "
                         "CMD passes no flags)")
+    p.add_argument("--no-repeat-ngram", type=int,
+                   default=int(os.environ.get("NO_REPEAT_NGRAM", 3)),
+                   help="ban generated token n-grams from repeating within "
+                        "a reply (loop breaker; prompt text is exempt). "
+                        "0 or 1 disables. Default: $NO_REPEAT_NGRAM or 3")
     args = p.parse_args()
 
-    global DEVICE, MAX_NEW_CAP, MAX_SECONDS, PREAMBLE
+    global DEVICE, MAX_NEW_CAP, MAX_SECONDS, PREAMBLE, NO_REPEAT_NGRAM
     DEVICE, MAX_NEW_CAP, MAX_SECONDS = args.device, args.max_new, args.max_seconds
     PREAMBLE = args.preamble
+    NO_REPEAT_NGRAM = args.no_repeat_ngram
 
     if args.model:
         wanted = {}

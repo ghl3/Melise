@@ -1,5 +1,15 @@
 import type { DoneStats, GenParams, Message } from "./types";
 
+function friendlyHttpError(status: number): string {
+  if (status === 401 || status === 403)
+    return "the site couldn't authenticate to the model server — its token is missing or stale";
+  if (status === 429)
+    return "melise is overwhelmed — too many people talking to her at once; give her a moment";
+  if (status >= 500)
+    return "melise's model server stumbled — try again in a moment";
+  return `unexpected reply from the model server (HTTP ${status})`;
+}
+
 interface StreamCallbacks {
   onDelta: (text: string) => void;
   onDone: (stats: DoneStats) => void;
@@ -28,7 +38,7 @@ export async function streamChat(
     return;
   }
   if (!res.ok || !res.body) {
-    onError(`upstream error (HTTP ${res.status})`);
+    onError(friendlyHttpError(res.status));
     return;
   }
 

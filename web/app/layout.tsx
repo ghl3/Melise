@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "melise",
+  title: "melise — a tiny AI, grown from scratch",
   description:
-    "melise — chat with tiny transformers trained from scratch (transformer-learning).",
+    "Chat with Melise: a 163M-parameter language model built and trained entirely from scratch — tokenizer, pretraining, chat tuning, and RL on a single GPU.",
 };
 
 export default function RootLayout({
