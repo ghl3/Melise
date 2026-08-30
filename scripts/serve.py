@@ -212,8 +212,16 @@ class ChatRequest(BaseModel):
 
 def check_auth(request: Request):
     token = os.environ.get("SERVE_TOKEN")
-    if token and request.headers.get("authorization") != f"Bearer {token}":
-        raise HTTPException(401, "bad or missing bearer token")
+    if not token:
+        return
+    # Two accepted carriers: Authorization (plain shared-secret deploys)
+    # or X-Serve-Token (IAM-authed Cloud Run, where Authorization must
+    # carry the Google ID token instead).
+    if request.headers.get("authorization") == f"Bearer {token}":
+        return
+    if request.headers.get("x-serve-token") == token:
+        return
+    raise HTTPException(401, "bad or missing bearer token")
 
 
 # Sliding-window rate limits, in memory. Correct only because the worker

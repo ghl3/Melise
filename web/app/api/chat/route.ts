@@ -1,12 +1,9 @@
 // Thin streaming proxy: the browser never sees the worker's URL or
-// bearer token; both live in server-side env (Vercel project settings).
+// credentials; both live in server-side env (Vercel project settings).
+// Auth to the worker is layered — Google ID token for Cloud Run IAM
+// plus the shared app token — see lib/upstream.ts.
 
-const WORKER = process.env.MODEL_SERVER_URL ?? "http://localhost:8000";
-
-function authHeaders(): Record<string, string> {
-  const token = process.env.MODEL_SERVER_TOKEN;
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
+import { WORKER, upstreamHeaders } from "@/lib/upstream";
 
 export async function POST(req: Request): Promise<Response> {
   // First x-forwarded-for entry is the browser; the worker rate-limits
@@ -19,7 +16,7 @@ export async function POST(req: Request): Promise<Response> {
     headers: {
       "Content-Type": "application/json",
       "X-Client-IP": clientIp,
-      ...authHeaders(),
+      ...(await upstreamHeaders()),
     },
     body: await req.text(),
     signal: req.signal, // client abort cancels the worker generation

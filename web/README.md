@@ -23,3 +23,11 @@ Vercel with the project **root directory set to `web/`**; deploy with
 `vercel --prod` from `web/` (Vercel is not wired to the GitHub repo, so
 pushing alone does not deploy), and set `MODEL_SERVER_URL` to the Cloud
 Run URL plus a shared `MODEL_SERVER_TOKEN`/`SERVE_TOKEN`.
+
+The worker runs IAM-gated (`--no-allow-unauthenticated`): Google rejects
+requests lacking a valid ID token before the container starts. The proxy
+mints those tokens from `GCP_SA_KEY` (Vercel env: the JSON key of a
+service account holding only `roles/run.invoker` on the worker — see
+`lib/upstream.ts`), and still sends the shared token via `X-Serve-Token`
+as a second layer. Local dev needs none of this: with `GCP_SA_KEY`
+unset the proxy talks plain HTTP to the localhost worker.

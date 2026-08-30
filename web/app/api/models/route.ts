@@ -1,9 +1,8 @@
-const WORKER = process.env.MODEL_SERVER_URL ?? "http://localhost:8000";
+import { WORKER, upstreamHeaders } from "@/lib/upstream";
 
 export async function GET(): Promise<Response> {
-  const token = process.env.MODEL_SERVER_TOKEN;
   const upstream = await fetch(`${WORKER}/v1/models`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: await upstreamHeaders(),
     cache: "no-store",
   });
   return new Response(upstream.body, {
