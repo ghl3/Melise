@@ -605,3 +605,79 @@ step 50 at 2,839 tok/s, grad_norm 1.47, 22,138 MiB — all matching the
 probe. Boot-resume crontab installed 23:52 with identical env;
 restarter stays paused. Gen-4 is on the rails; ETA ~9 d pretrain,
 ~11–12 d end-to-end.
+
+## 2026-08-29/30 — Gen-4 complete: scorecard, and bright-river goes live on meliseai.com
+
+**Goal.** Post-run wrap: confirm the pipeline finished, score
+bright-river against the pre-committed success metrics, and swap
+meliseai.com from gen-3 to gen-4.
+
+**Setup.** VM found TERMINATED (DONE_CMD shutdown — the intended
+completion signal); all verification done from bucket artifacts, no
+GPU needed. Total run: 2026-08-17 23:48 → 2026-08-29 ~04:40 UTC,
+11 d 5 h, ~$228, ZERO incidents (boot-resume never fired). Stages:
+pretrain 268,500 (9 d 21 h), SFT 25,000 + 1,500 tail (~25 h), GRPO
+600 (5.8 h), then the offline battery (enwik8 test + both holdout
+books + full probes ×3 checkpoints) before shutdown.
+
+**Results.**
+- Pretrain: best val_bpb 1.0554 / val_acc 0.4766 at 268,500 (WSD
+  decay tail delivered −0.072 bpb over the final 32.5k steps).
+  **enwik8 test bpb 0.9747** — beats the gen-3 cross-gen bar (1.096)
+  by 11%. Holdouts: emma 1.300, great_expectations 1.294. Every
+  domain fell monotonically to the last eval — NO eviction climb
+  (war_and_peace 1.0433, vs gen-3's +0.34 disaster).
+- SFT: best val_loss 1.5603 @ 24600; val_bpb 0.653, tasks_bpb 0.134.
+- GRPO: best eval reward 0.887 @ step 400 (= best.pt); final 0.872.
+  parity/copy/count/recall hold ~1.0, facts + context_recall learned;
+  arith stuck at first-step-correct (~0.25–0.34 train, 0.44 eval).
+- Scorecard vs pre-committed metrics: **4 pass, 2 partial.** PASS:
+  cross-gen bar, identity (identity/novel 1.0 through SFT+GRPO — the
+  corpus-v2 preservation bet paid; gen-3 went 0.67→0), forgetting
+  (pretrain→rlvr enwik8 +0.324 vs gen-3's +0.74; date/honesty 1.0
+  held through RL), eviction. PARTIAL: capacity bet — facts heldout
+  in chat form: membership 0.36, counts 0.25, instances 0.20 off the
+  floor, but capitals/attributes 0.00 (train facts ~1.0 everywhere:
+  3× routed storage bought memorization, mostly not generalization).
+  PARTIAL: GRPO (arith).
+- Chat quality, honestly: extremely terse/template-y ("Tell me about
+  France." → "Paris."; freeform continuation prompts collapse to
+  "Hi, I'm Melise."); code/poetry broken. But the basic-chatbot bar
+  (greeting, name, date, taught facts) is met for the first time.
+- **SERVE SWAP (2026-08-30).** rlvr best.pt (step 400) optimizer-
+  stripped 1.83 GiB → 653 MB fp32, staged to serve_models/, local
+  load-smoke through serve.py's path, then `gcloud run deploy
+  melise-worker --source .` → rev 00003 at 100% traffic. Changes vs
+  gen-3 serving: memory 2Gi→4Gi (load peaks ~2× the 653 MB file),
+  SERVE_PREAMBLE now the DATED form ("… Today is {date}.", rendered
+  per request in the exact training format), gen-3 removed from the
+  image (discovery only serves newest per stage; it's in the bucket).
+  Live battery passed: "What is your name?" → "I'm called Melise.";
+  "What day is today?" → "Today is Sunday, August 30, 2026."
+  (correct, READ from the preamble — a gen-4-only capability);
+  greeting → honest self-description; capital of France → "Paris."
+  Measured 2.8–4.4 tok/s warm on 2 vCPU — top of the ~2.5–3
+  projection, close to gen-3's 4.5; accepted, --cpu 4 in reserve.
+  Selector shows gen-4 as "rlvr · 163M · bpe8k".
+
+**Learnings.**
+1. The full 12-day unattended pipeline (launch → 3 stages → offline
+   battery → self-shutdown) worked exactly as designed on the first
+   try — the probe-session + toy-validation ritual is what bought
+   that.
+2. Replay + tail cut chat-training forgetting by more than half
+   (+0.32 vs +0.74) but didn't eliminate it; chat-form verbatim
+   (verbatim_chat/enwik8 0.05) shows the chat model largely can't do
+   continuation even when the base model can.
+3. Capacity ≠ generalization: heldout facts moved only on families
+   with list-y surface forms (membership/counts/instances); entity→
+   attribute mappings (capitals/attributes) stayed at zero despite
+   perfect train recall.
+4. Serve-time sampling still flickers identity occasionally in RL
+   rollouts ("I'm Williams", r=0) even with probe-perfect identity —
+   worth a temp-0.8 serve-time spot-check someday.
+
+**Next steps.** Run-doc Results checklist fill (gen4-medium-wide.md);
+chat battery vs gen-2/gen-3; --cpu 4 decision if the site feels slow;
+gen-3 homework (routing map, eviction anatomy, lm_head SVD) on a
+future VM window; VM boot disk deletable (bucket has everything).
